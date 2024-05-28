@@ -3,12 +3,18 @@ project(tocabi_cc)
 
 add_compile_options(-std=c++17 -Ofast)
 
-find_package(catkin REQUIRED
+find_package(catkin REQUIRED COMPONENTS
 roscpp
 tocabi_lib
 tocabi_msgs
 eigen_conversions
+cv_bridge
+image_transport
+sensor_msgs
+std_msgs
 )
+
+find_package(OpenCV REQUIRED)
 
 catkin_package(
   INCLUDE_DIRS include
@@ -24,6 +30,7 @@ catkin_package(
 include_directories(
     include
     ${catkin_INCLUDE_DIRS}
+    ${OpenCV_INCLUDE_DIRS}
 )
 
 add_library(${PROJECT_NAME}
@@ -31,8 +38,10 @@ add_library(${PROJECT_NAME}
 )
 add_dependencies(${PROJECT_NAME} ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
+
 target_link_libraries(${PROJECT_NAME}
   ${catkin_LIBRARIES}
+  ${OpenCV_LIBRARIES}
 )
 
 install(TARGETS ${PROJECT_NAME}
