@@ -5,6 +5,7 @@
 #include "geometry_msgs/Vector3.h"
 #include "trajectory_msgs/JointTrajectory.h"
 #include "trajectory_msgs/JointTrajectoryPoint.h"
+#include "sensor_msgs/JointState.h"
 #include <tf/tf.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <Eigen/Dense>
@@ -40,6 +41,7 @@ public:
     void HapticPoseCallback(const geometry_msgs::PoseConstPtr &msg);
     void CupPosCallback(const geometry_msgs::PointPtr &msg);
     void JointTrajectoryCallback(const trajectory_msgs::JointTrajectoryPtr &msg);
+    void JointTargetCallback(const sensor_msgs::JointStatePtr &msg);
     Eigen::Matrix3d Quat2rotmatrix(double q0, double q1, double q2, double q3);
     float PositionMapping( float haptic_pos, int i);
     bool saveImage(const sensor_msgs::ImageConstPtr &image_msg);
@@ -53,6 +55,7 @@ public:
     ros::CallbackQueue queue_cc_;
     ros::Subscriber haptic_pose_sub_;
     ros::Subscriber joint_trajectory_sub;
+    ros::Subscriber joint_target_sub;
     ros::Publisher haptic_force_pub_;
     ros::Subscriber cup_pos_sub;
     
@@ -63,8 +66,17 @@ public:
     Eigen::VectorQd desired_q_;
     Eigen::VectorQd desired_qdot_;
     std::vector<trajectory_msgs::JointTrajectoryPoint> points;
+    bool init_time = false;
     int traj_index = -1;
-    int num_waypoint = 0;
+    int num_waypoint = -1;
+
+    bool target_received = false;
+    double t_0_;
+    std::vector<double> right_arm_target;
+    Eigen::Matrix<double, 8, 1> q_0_;
+    Eigen::Matrix<double, 8, 1> qdot_0_;
+    ros::Publisher terminate_pub;
+    std_msgs::Bool terminate_msg;
 
 
     void resetRobotPose(double duration);
@@ -72,8 +84,9 @@ public:
     Eigen::Matrix<double, MODEL_DOF, 1> q_init_;
     double time_init_ = 0.0;
     
-    std::string folderPath, fileName, filePath;
-    std::string folderPath2, fileName2, filePath2;
+    std::string folderPath, filePath_hand, filePath_joint, filePath_info;   // for hand pose and joint
+    std::string folderPath_image, fileName_image, filePath_image;           // for images
+    std::ofstream fout, fout2, fout3;
 
     // float pos_x_;
 
@@ -88,11 +101,12 @@ public:
     image_transport::Subscriber camera_image_sub;
 
     int camera_tick_ = 0;
-    bool data_collect_start_ = true;
+    bool data_collect_start_ = false;
     bool make_dir = true;
+    bool terminate = false;
 
     float distance_hand2obj;
-    int prev_mode = 0;
+    int prev_mode = 8;
 
 private:
     Eigen::VectorQd ControlVal_;
