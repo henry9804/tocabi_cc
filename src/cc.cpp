@@ -12,7 +12,7 @@ CustomController::CustomController(RobotData &rd) : rd_(rd) //, wbc_(dc.wbc_)
 {
     nh_cc_.setCallbackQueue(&queue_cc_);
     haptic_pose_sub_ = nh_cc_.subscribe("/haptic/pose", 1, &CustomController::HapticPoseCallback, this);
-    cup_pos_sub = nh_cc_.subscribe("/cup_pos", 1, &CustomController::CupPosCallback, this);
+    cup_pose_sub = nh_cc_.subscribe("/cup_pose", 1, &CustomController::CupPoseCallback, this);
     joint_trajectory_sub = nh_cc_.subscribe("/tocabi/srmt/trajectory", 1, &CustomController::JointTrajectoryCallback, this);
     joint_target_sub = nh_cc_.subscribe("/tocabi/act/joint_target", 1, &CustomController::JointTargetCallback, this);
     haptic_force_pub_ = nh_cc_.advertise<geometry_msgs::Vector3>("/haptic/force", 10);
@@ -69,7 +69,7 @@ bool CustomController::saveImage(const sensor_msgs::ImageConstPtr &image_msg) {
         std::ostringstream oss;
         oss << std::setw(9) << std::setfill('0') << t_.nsec;
         std::stringstream fileNameSS;
-        fileNameSS << "image-" << camera_tick_ << "-" << t_.sec << "-" << oss.str() << ".jpg";
+        fileNameSS << "image_" << camera_tick_ << "_" << t_.sec << "_" << oss.str() << ".jpg";
         fileName_image = fileNameSS.str();
 
         std::stringstream filePathSS;
@@ -90,16 +90,18 @@ bool CustomController::saveImage(const sensor_msgs::ImageConstPtr &image_msg) {
 
 void CustomController::camera_img_callback(const sensor_msgs::ImageConstPtr &msg)
 {
-    try
-    {
-        // ROS_INFO("Camera Callback. '%d'", camera_tick_);
-        // save the image
-        if (!saveImage(msg)) return;
-        // ROS_INFO("Image Saved.");
-    }
-    catch (cv_bridge::Exception& e)
-    {
-        ROS_ERROR("Could not convert from '%s' to 'bgr8'.", msg->encoding.c_str());
+    if(data_collect_start_){
+        try
+        {
+            // ROS_INFO("Camera Callback. '%d'", camera_tick_);
+            // save the image
+            if (!saveImage(msg)) return;
+            // ROS_INFO("Image Saved.");
+        }
+        catch (cv_bridge::Exception& e)
+        {
+            ROS_ERROR("Could not convert from '%s' to 'bgr8'.", msg->encoding.c_str());
+        }
     }
 }
 
@@ -123,9 +125,7 @@ void CustomController::computeSlow()
             prev_mode = 6;
 
             camera_tick_ = 0;
-            make_dir = true;
             target_received = false;
-            init = ros::Time::now();
             terminate_msg.data = false;
             terminate_pub.publish(terminate_msg);
 
@@ -133,16 +133,14 @@ void CustomController::computeSlow()
                 desired_q_[i] = rd_.q_[i];
                 desired_qdot_[i] = 0.0;
             }
-        }
         
-        // initialize file for data collection
-        if(make_dir){
+            // initialize file for data collection
             std::stringstream folderPathSS;
             // [Check] ros::Time::now().sec is int32 type.
             auto now = std::chrono::system_clock::now();
             std::time_t currentTime = std::chrono::system_clock::to_time_t(now);
             // folderPathSS << "/home/hokyun20/2024winter_ws/src/camera_pubsub/" << ros::Time::now().sec;
-            folderPathSS << "/home/embodied_ai/catkin_ws/src/tocabi/result/" << std::put_time(std::localtime(&currentTime), "%Y%m%d-%H%M%S");
+            folderPathSS << "/home/lyh/catkin_ws/src/tocabi/result/" << std::put_time(std::localtime(&currentTime), "%Y%m%d-%H%M%S");
             folderPath = folderPathSS.str();
             
             folderPathSS << "/image";
@@ -156,7 +154,6 @@ void CustomController::computeSlow()
             if(result2 != 0){
                 ROS_ERROR("Couldn't make folder2(dir), Check folderPath2");
             }
-            make_dir = false;
 
             std::stringstream filePathSS_hand;
             filePathSS_hand << folderPath << "/hand.txt";
@@ -189,8 +186,12 @@ void CustomController::computeSlow()
                 ROS_ERROR("Couldn't open text file3");
             }
         }
-            
+        
         if(target_received){
+            if(!data_collect_start_){
+                data_collect_start_ = true;
+                init = ros::Time::now();
+            }
             // compute current distance between hand and cup for terminal condition check
             Eigen::Vector3d rhand_pos_;
             rhand_pos_ << rd_.link_[Right_Hand].xpos;
@@ -204,32 +205,38 @@ void CustomController::computeSlow()
             // rd_.torque_grav = WBC::GravityCompensationTorque(rd_);
 
             double t_ = (ros::Time::now() - init).toSec();
+            double dt = 1/30;
             for(int i = 0; i < 8; i++){
-                desired_q_[MODEL_DOF-8+i] = DyrosMath::cubic(t_, t_0_, t_0_+0.125, q_0_[i], right_arm_target[i], qdot_0_[i], 0);
-                desired_qdot_[MODEL_DOF-8+i] = DyrosMath::cubicDot(t_, t_0_, t_0_+0.125, q_0_[i], right_arm_target[i], qdot_0_[i], 0);
+                desired_q_[MODEL_DOF-8+i] = DyrosMath::cubic(t_, t_0_, t_0_+dt, q_0_[i], right_arm_target_[i], qdot_0_[i], 0);
+                desired_qdot_[MODEL_DOF-8+i] = DyrosMath::cubicDot(t_, t_0_, t_0_+dt, q_0_[i], right_arm_target_[i], qdot_0_[i], 0);
             }
 
-            // write data to the file
-            fout << camera_tick_ << "\t" << t_ << "\t" << rhand_pos_(0) << "\t" << rhand_pos_(1) << "\t" << rhand_pos_(2) << "\t" 
-                    << rd_.link_[Right_Hand].roll << "\t"<< rd_.link_[Right_Hand].pitch << "\t"<< rd_.link_[Right_Hand].yaw << "\t" << distance_hand2obj << endl;
-            
-            fout2 << camera_tick_ << "\t" << t_ << "\t";
-            for(int i = 0; i < MODEL_DOF; i++){
-                fout2 << rd_.q_[i] << "\t";
+            if(camera_tick_%16 == 0){
+                // write data to the file
+                fout << camera_tick_ << "\t" << t_ << "\t" << rhand_pos_(0) << "\t" << rhand_pos_(1) << "\t" << rhand_pos_(2) << "\t" 
+                        << rd_.link_[Right_Hand].roll << "\t"<< rd_.link_[Right_Hand].pitch << "\t"<< rd_.link_[Right_Hand].yaw << "\t" << distance_hand2obj << endl;
+                
+                fout2 << camera_tick_ << "\t" << t_ << "\t";
+                for(int i = 0; i < MODEL_DOF; i++){
+                    fout2 << rd_.q_[i] << "\t";
+                }
+                for(int i = 0; i < MODEL_DOF; i++){
+                    fout2 << desired_q_[i] << "\t";
+                }
+                for(int i = 0; i < MODEL_DOF; i++){
+                    fout2 << rd_.q_dot_[i] << "\t";
+                }
+                for(int i = 0; i < MODEL_DOF; i++){
+                    fout2 << desired_qdot_[i] << "\t";
+                }
+                for(int i = 0; i < MODEL_DOF; i++){
+                    fout2 << right_arm_target_[i] << "\t";
+                }
+                fout2 << endl;
             }
-            for(int i = 0; i < MODEL_DOF; i++){
-                fout2 << desired_q_[i] << "\t";
-            }
-            for(int i = 0; i < MODEL_DOF; i++){
-                fout2 << rd_.q_dot_[i] << "\t";
-            }
-            for(int i = 0; i < MODEL_DOF; i++){
-                fout2 << desired_qdot_[i] << "\t";
-            }
-            fout2 << endl;
             camera_tick_++;
             
-            if (t_ > 20.0){
+            if (t_ > 10.0){
                 bool is_reached = (distance_hand2obj < 0.3);
                 fout3 << is_reached << endl;
                 std::cout<< (is_reached ? "Reached" : "Failed") << std::endl;
@@ -237,6 +244,7 @@ void CustomController::computeSlow()
                 terminate_msg.data = true;
                 terminate_pub.publish(terminate_msg);
 
+                data_collect_start_ = false;
                 rd_.tc_.mode = 7;
                 rd_.tc_init = true;
             }
@@ -295,22 +303,19 @@ void CustomController::computeSlow()
             prev_mode = 8;
 
             camera_tick_ = 0;
-            make_dir = true;
 
             for(int i = 0; i < MODEL_DOF; i++){
                 desired_q_[i] = rd_.q_[i];
                 desired_qdot_[i] = 0.0;
             }
-        }
         
-        // initialize file for data collection
-        if(make_dir){
+            // initialize file for data collection
             std::stringstream folderPathSS;
             // [Check] ros::Time::now().sec is int32 type.
             auto now = std::chrono::system_clock::now();
             std::time_t currentTime = std::chrono::system_clock::to_time_t(now);
             // folderPathSS << "/home/hokyun20/2024winter_ws/src/camera_pubsub/" << ros::Time::now().sec;
-            folderPathSS << "/home/embodied_ai/catkin_ws/src/tocabi/data/" << std::put_time(std::localtime(&currentTime), "%Y%m%d-%H%M%S");
+            folderPathSS << "/home/lyh/catkin_ws/src/tocabi/data/" << std::put_time(std::localtime(&currentTime), "%Y%m%d-%H%M%S");
             folderPath = folderPathSS.str();
             
             folderPathSS << "/image";
@@ -324,7 +329,6 @@ void CustomController::computeSlow()
             if(result2 != 0){
                 ROS_ERROR("Couldn't make folder2(dir), Check folderPath2");
             }
-            make_dir = false;
 
             std::stringstream filePathSS_hand;
             filePathSS_hand << folderPath << "/hand.txt";
@@ -402,27 +406,27 @@ void CustomController::computeSlow()
             }
 
             // write data to the file
-            if(camera_tick_%40 == 0){
+            if(camera_tick_%16 == 0){
                 // ROS_INFO("I heard: [%d]", camera_tick_);
                 camera_flag_msg.data = true;
                 camera_flag_pub.publish(camera_flag_msg);
                 fout << camera_tick_ << "\t" << t_ << "\t" << rhand_pos_(0) << "\t" << rhand_pos_(1) << "\t" << rhand_pos_(2) << "\t" 
                      << rd_.link_[Right_Hand].roll << "\t"<< rd_.link_[Right_Hand].pitch << "\t"<< rd_.link_[Right_Hand].yaw << "\t" << distance_hand2obj << endl;
+                fout2 << camera_tick_ << "\t" << t_ << "\t";
+                for(int i = 0; i < MODEL_DOF; i++){
+                    fout2 << rd_.q_[i] << "\t";
+                }
+                for(int i = 0; i < MODEL_DOF; i++){
+                    fout2 << desired_q_[i] << "\t";
+                }
+                for(int i = 0; i < MODEL_DOF; i++){
+                    fout2 << rd_.q_dot_[i] << "\t";
+                }
+                for(int i = 0; i < MODEL_DOF; i++){
+                    fout2 << desired_qdot_[i] << "\t";
+                }
+                fout2 << endl;
             }
-            fout2 << camera_tick_ << "\t" << t_ << "\t";
-            for(int i = 0; i < MODEL_DOF; i++){
-                fout2 << rd_.q_[i] << "\t";
-            }
-            for(int i = 0; i < MODEL_DOF; i++){
-                fout2 << desired_q_[i] << "\t";
-            }
-            for(int i = 0; i < MODEL_DOF; i++){
-                fout2 << rd_.q_dot_[i] << "\t";
-            }
-            for(int i = 0; i < MODEL_DOF; i++){
-                fout2 << desired_qdot_[i] << "\t";
-            }
-            fout2 << endl;
             camera_tick_++;
 
             if (traj_index == num_waypoint-1){
@@ -633,11 +637,11 @@ void CustomController::HapticPoseCallback(const geometry_msgs::PoseConstPtr &msg
 
 }
 
-void CustomController::CupPosCallback(const geometry_msgs::PointPtr &msg)
+void CustomController::CupPoseCallback(const geometry_msgs::PoseConstPtr &msg)
 {
-    float cup_x = msg -> x;
-    float cup_y = msg -> y;
-    float cup_z = msg -> z;
+    float cup_x = msg->position.x;
+    float cup_y = msg->position.y;
+    float cup_z = msg->position.z;
  
     cup_pos_ << cup_x, cup_y, cup_z;
     // std::cout << "CupPos subscribed!" << std::endl;
@@ -656,7 +660,7 @@ void CustomController::JointTargetCallback(const sensor_msgs::JointStatePtr &msg
     t_0_ = (msg->header.stamp - init).toSec();
     q_0_ = rd_.q_.block<8,1>(25,0);
     qdot_0_ = rd_.q_dot_.block<8,1>(25,0);
-    right_arm_target = msg->position;
+    right_arm_target_ = msg->position;
     target_received = true;
 }
 
