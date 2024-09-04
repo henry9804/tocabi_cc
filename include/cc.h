@@ -19,6 +19,7 @@
 #include <opencv2/highgui/highgui.hpp>
 #include <cv_bridge/cv_bridge.h>
 #include <std_msgs/Bool.h>
+#include <std_msgs/Int32.h>
 #include <sys/stat.h>
 #include <chrono>
 // #include <boost/shared_ptr.hpp>
@@ -72,16 +73,19 @@ public:
 
     bool target_received = false;
     double t_0_;
-    std::vector<double> right_arm_target_;
-    Eigen::Matrix<double, 8, 1> q_0_;
-    Eigen::Matrix<double, 8, 1> qdot_0_;
+    std::vector<std::string> joint_names_;
+    std::vector<double> joint_target_;
+    Eigen::VectorQd q_0_;
+    Eigen::VectorQd qdot_0_;
     ros::Publisher terminate_pub;
     std_msgs::Bool terminate_msg;
+    ros::Publisher hand_open_pub;
+    std_msgs::Int32 hand_open_msg;
 
 
     void resetRobotPose(double duration);
     bool target_reached_ = false;
-    Eigen::Matrix<double, MODEL_DOF, 1> q_init_;
+    Eigen::VectorQd q_init_;
     double time_init_ = 0.0;
     
     std::string folderPath, filePath_hand, filePath_joint, filePath_info;   // for hand pose and joint
@@ -110,4 +114,5 @@ public:
 
 private:
     Eigen::VectorQd ControlVal_;
+    map<std::string, int> JOINT_INDEX;
 };

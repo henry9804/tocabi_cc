@@ -22,6 +22,11 @@ CustomController::CustomController(RobotData &rd) : rd_(rd) //, wbc_(dc.wbc_)
     camera_image_sub = it.subscribe("/mujoco_ros_interface/camera/image", 1, &CustomController::camera_img_callback, this);
     new_cup_pos_pub = nh_cc_.advertise<geometry_msgs::Point>("/new_cup_pos", 1);
     terminate_pub = nh_cc_.advertise<std_msgs::Bool>("/tocabi/act/terminate", 1);
+    hand_open_pub = nh_cc_.advertise<std_msgs::Int32>("/mujoco_ros_interface/hand_open", 1);
+
+    for(int i = 0; i < MODEL_DOF; i++){
+        JOINT_INDEX.insert({JOINT_NAME[i], i});
+    }
 }
 
 Eigen::VectorQd CustomController::getControl()
@@ -126,8 +131,9 @@ void CustomController::computeSlow()
 
             camera_tick_ = 0;
             target_received = false;
-            terminate_msg.data = false;
-            terminate_pub.publish(terminate_msg);
+            // uncomment following lines for automatic policy test
+            // terminate_msg.data = false;
+            // terminate_pub.publish(terminate_msg);
 
             for(int i = 0; i < MODEL_DOF; i++){
                 desired_q_[i] = rd_.q_[i];
@@ -171,7 +177,8 @@ void CustomController::computeSlow()
             fout2.open(filePath_joint);
             fout2 << "camera_tick" << "\t" << "ros_time" << "\t" 
                     << "current_joint_pos" << "\t" << "target_joint_pos" << "\t" 
-                    << "current_joint_vel" << "\t" << "target_joint_vel" << endl; 
+                    << "current_joint_vel" << "\t" << "target_joint_vel" << "\t" 
+                    << "recieved_target" << endl; 
             if(!fout2.is_open()){
                 ROS_ERROR("Couldn't open text file2");
             }
@@ -206,9 +213,10 @@ void CustomController::computeSlow()
 
             double t_ = (ros::Time::now() - init).toSec();
             double dt = 1/30;
-            for(int i = 0; i < 8; i++){
-                desired_q_[MODEL_DOF-8+i] = DyrosMath::cubic(t_, t_0_, t_0_+dt, q_0_[i], right_arm_target_[i], qdot_0_[i], 0);
-                desired_qdot_[MODEL_DOF-8+i] = DyrosMath::cubicDot(t_, t_0_, t_0_+dt, q_0_[i], right_arm_target_[i], qdot_0_[i], 0);
+            for(int i = 0; i < joint_names_.size(); i++){
+                int j = JOINT_INDEX[joint_names_[i]];
+                desired_q_[j] = DyrosMath::cubic(t_, t_0_, t_0_+dt, q_0_[j], joint_target_[i], qdot_0_[j], 0);
+                desired_qdot_[j] = DyrosMath::cubicDot(t_, t_0_, t_0_+dt, q_0_[j], joint_target_[i], qdot_0_[j], 0);
             }
 
             if(camera_tick_%16 == 0){
@@ -229,25 +237,26 @@ void CustomController::computeSlow()
                 for(int i = 0; i < MODEL_DOF; i++){
                     fout2 << desired_qdot_[i] << "\t";
                 }
-                for(int i = 0; i < MODEL_DOF; i++){
-                    fout2 << right_arm_target_[i] << "\t";
+                for(int i = 0; i < joint_names_.size(); i++){
+                    fout2 << joint_target_[i] << "\t";
                 }
                 fout2 << endl;
             }
             camera_tick_++;
             
-            if (t_ > 10.0){
-                bool is_reached = (distance_hand2obj < 0.3);
-                fout3 << is_reached << endl;
-                std::cout<< (is_reached ? "Reached" : "Failed") << std::endl;
+            // uncomment following lines for automatic policy test
+            // if (t_ > 10.0){
+            //     bool is_reached = (distance_hand2obj < 0.3);
+            //     fout3 << is_reached << endl;
+            //     std::cout<< (is_reached ? "Reached" : "Failed") << std::endl;
 
-                terminate_msg.data = true;
-                terminate_pub.publish(terminate_msg);
+            //     terminate_msg.data = true;
+            //     terminate_pub.publish(terminate_msg);
 
-                data_collect_start_ = false;
-                rd_.tc_.mode = 7;
-                rd_.tc_init = true;
-            }
+            //     data_collect_start_ = false;
+            //     rd_.tc_.mode = 7;
+            //     rd_.tc_init = true;
+            // }
         }
         for (int i = 0; i < MODEL_DOF; i++){
             rd_.torque_desired[i] = rd_.pos_kp_v[i] * (desired_q_[i] - rd_.q_[i]) + rd_.pos_kv_v[i] * (desired_qdot_[i] - rd_.q_dot_[i]);
@@ -280,6 +289,9 @@ void CustomController::computeSlow()
 
         if (rd_.control_time_ > time_init_ + duration)
         {
+            hand_open_msg.data = 0;
+            hand_open_pub.publish(hand_open_msg);
+
             const double minX = -0.1;
             const double maxX = 0.1;
             const double minY = -0.3;
@@ -392,15 +404,15 @@ void CustomController::computeSlow()
                     double t_f = points[traj_index+1].time_from_start.toSec();
                     auto   p_f = points[traj_index+1].positions;
                     auto   v_f = points[traj_index+1].velocities;
-                    for(int i = 0; i < 8; i++){                    
-                        desired_q_[MODEL_DOF-8+i] = DyrosMath::cubic(t_, t_0, t_f, p_0[i], p_f[i], v_0[i], v_f[i]);
-                        desired_qdot_[MODEL_DOF-8+i] = DyrosMath::cubicDot(t_, t_0, t_f, p_0[i], p_f[i], v_0[i], v_f[i]);
+                    for(int i = 0; i < joint_names_.size(); i++){                    
+                        desired_q_[JOINT_INDEX[joint_names_[i]]] = DyrosMath::cubic(t_, t_0, t_f, p_0[i], p_f[i], v_0[i], v_f[i]);
+                        desired_qdot_[JOINT_INDEX[joint_names_[i]]] = DyrosMath::cubicDot(t_, t_0, t_f, p_0[i], p_f[i], v_0[i], v_f[i]);
                     }
                 }
                 else{
-                    for(int i = 0; i < 8; i++){                    
-                        desired_q_[MODEL_DOF-8+i] = points[traj_index].positions[i];
-                        desired_qdot_[MODEL_DOF-8+i] = points[traj_index].velocities[i];
+                    for(int i = 0; i < joint_names_.size(); i++){                    
+                        desired_q_[JOINT_INDEX[joint_names_[i]]] = points[traj_index].positions[i];
+                        desired_qdot_[JOINT_INDEX[joint_names_[i]]] = points[traj_index].velocities[i];
                     }
                 }
             }
@@ -649,6 +661,7 @@ void CustomController::CupPoseCallback(const geometry_msgs::PoseConstPtr &msg)
 
 void CustomController::JointTrajectoryCallback(const trajectory_msgs::JointTrajectoryPtr &msg)
 {
+    joint_names_ = msg->joint_names;
     points = msg->points;
     data_collect_start_ = true;
     init_time = true;
@@ -658,9 +671,10 @@ void CustomController::JointTrajectoryCallback(const trajectory_msgs::JointTraje
 void CustomController::JointTargetCallback(const sensor_msgs::JointStatePtr &msg)
 {
     t_0_ = (msg->header.stamp - init).toSec();
-    q_0_ = rd_.q_.block<8,1>(25,0);
-    qdot_0_ = rd_.q_dot_.block<8,1>(25,0);
-    right_arm_target_ = msg->position;
+    q_0_ = rd_.q_;
+    qdot_0_ = rd_.q_dot_;
+    joint_names_ = msg->name;
+    joint_target_ = msg->position;
     target_received = true;
 }
 
