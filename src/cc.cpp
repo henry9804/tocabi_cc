@@ -10,6 +10,7 @@ using namespace TOCABI;
 CustomController::CustomController(RobotData &rd) : rd_(rd) //, wbc_(dc.wbc_)
 {
     nh_cc_.setCallbackQueue(&queue_cc_);
+    mode_sub = nh_cc_.subscribe("/tocabi/act/mode", 1, &CustomController::ModeCallback, this);
     joint_target_sub = nh_cc_.subscribe("/tocabi/act/joint_target", 1, &CustomController::JointTargetCallback, this);
     ControlVal_.setZero();
 
@@ -306,10 +307,21 @@ void CustomController::computeFast()
     }
 }
 
+void CustomController::ModeCallback(const std_msgs::Int32Ptr &msg)
+{
+    std::cout << "act mode msg: " << msg->data << std::endl;
+    if (msg->data == 0) {
+        rd_.tc_.mode = 6;
+        rd_.tc_init = true;
+    }
+    else if (msg->data == 1) {
+        rd_.tc_.mode = 7;
+        rd_.tc_init = true;
+    }
+}
+
 void CustomController::JointTargetCallback(const sensor_msgs::JointStatePtr &msg)
 {
-    std::cout << "received joint target!" << std::endl;
-    rd_.tc_.mode = 7;
     t_0_ = rd_.control_time_;
     q_0_ = rd_.q_;
     qdot_0_ = rd_.q_dot_;

@@ -33,6 +33,7 @@ public:
     void computePlanner();
     void copyRobotData(RobotData &rd_l);
 
+    void ModeCallback(const std_msgs::Int32Ptr &msg);
     void JointTargetCallback(const sensor_msgs::JointStatePtr &msg);
     Eigen::Matrix3d Quat2rotmatrix(double q0, double q1, double q2, double q3);
 
@@ -41,6 +42,7 @@ public:
 
     ros::NodeHandle nh_cc_;
     ros::CallbackQueue queue_cc_;
+    ros::Subscriber mode_sub;
     ros::Subscriber joint_target_sub;
     
     Eigen::VectorQd desired_q_;
