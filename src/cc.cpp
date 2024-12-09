@@ -125,7 +125,7 @@ void CustomController::computeSlow()
         WBC::SetContact(rd_, 1, 1);
         rd_.torque_desired = rd_.torque_desired + WBC::ContactForceRedistributionTorque(rd_, WBC::GravityCompensationTorque(rd_));
     }
-    else if (rd_.tc_.mode == 8)
+    else if (rd_.tc_.mode == 9)
     {
         double ang2rad = 0.0174533;
 
@@ -179,7 +179,7 @@ void CustomController::computeSlow()
 
         }
 
-        WBC::SetContact(rd_, rd_.tc_.left_foot, rd_.tc_.right_foot, rd_.tc_.left_hand, rd_.tc_.right_hand);
+        WBC::SetContact(rd_, 1, 1);
         if (rd_.tc_.customTaskGain)
         {
             rd_.link_[Pelvis].SetGain(rd_.tc_.pos_p, rd_.tc_.pos_d, rd_.tc_.acc_p, rd_.tc_.ang_p, rd_.tc_.ang_d, 1);
@@ -255,6 +255,7 @@ void CustomController::computeSlow()
         {
             torque_pos_hold[i] = rd_.pos_kp_v[i] * (init_q_[i] - rd_.q_[i]) + rd_.pos_kv_v[i] * ( - rd_.q_dot_[i]);
         }
+        torque_pos_hold += WBC::ContactForceRedistributionTorque(rd_, rd_.torque_grav);
 
         torque_pos_hold.segment(25,8).setZero();
 
@@ -268,6 +269,120 @@ void CustomController::computeSlow()
         {
             rd_.torque_desired[i] = torque_pos_hold[i] + torque_right_arm[i];
         }
+    }
+    else if (rd_.tc_.mode == 8){        
+        double ang2rad = 0.0174533;
+
+        static bool init_qp;
+
+        static Matrix3d r_rot_hand_init;
+
+        static Vector3d r_pos_hand_init;
+        static Vector3d r_pos_des_init;
+
+        double alpha = 0.1; // 필터 계수 (조정 가능)
+        Eigen::VectorXd filtered_qdot_(MODEL_DOF);
+        Eigen::VectorXd filtered_q_(MODEL_DOF);
+
+        if (rd_.tc_init)
+        {
+            init_qp = true;
+
+            std::cout << "mode 8 init!" << std::endl;
+            rd_.tc_init = false;
+            rd_.link_[COM_id].x_desired = rd_.link_[COM_id].x_init;
+
+            r_rot_hand_init = rd_.link_[Right_Hand].rotm;
+            r_pos_hand_init = rd_.link_[Right_Hand].xpos;
+            for(int i = 0; i < MODEL_DOF; i++){
+                desired_q_[i] = rd_.q_[i];
+                desired_qdot_[i] = 0.0;
+            }
+            des_r_pos_ = rd_.link_[Right_Hand].xpos;
+            des_r_pos_(0) += rd_.tc_.r_x;
+            des_r_pos_(1) += rd_.tc_.r_y;
+            des_r_pos_(2) += rd_.tc_.r_z;
+            des_r_orientation_ = r_rot_hand_init;
+        }
+                
+        WBC::SetContact(rd_, 1, 1);
+        // if (rd_.tc_.customTaskGain)
+        // {
+        //     // rd_.link_[Pelvis].SetGain(rd_.tc_.pos_p, rd_.tc_.pos_d, rd_.tc_.acc_p, rd_.tc_.ang_p, rd_.tc_.ang_d, 1);
+        //     rd_.link_[Upper_Body].SetGain(rd_.tc_.pos_p, rd_.tc_.pos_d, rd_.tc_.acc_p, rd_.tc_.ang_p, rd_.tc_.ang_d, 1);
+        //     rd_.link_[Right_Hand].SetGain(rd_.tc_.pos_p, rd_.tc_.pos_d, rd_.tc_.acc_p, rd_.tc_.ang_p, rd_.tc_.ang_d, 1);
+        // }
+        
+        // ARM // right ram jac
+        // rd_.link_[Right_Hand].x_desired = des_r_pos_;
+        // Vector3d hand_r_pos_desired = rd_.link_[Right_Hand].x_desired;
+
+        rd_.link_[Right_Hand].SetTrajectoryQuintic(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, des_r_pos_);
+        Vector3d hand_r_pos_desired = rd_.link_[Right_Hand].x_traj;
+        Matrix3d hand_r_rot_desired = des_r_orientation_;
+
+        DyrosMath::rot2Euler_tf2(hand_r_rot_desired, drr_, drp_, dry_);
+
+        Eigen::MatrixXd J = rd_.link_[Right_Hand].Jac();
+        Eigen::MatrixXd J_r_arm = J.block(0, 6+33-8, 6, 8);
+        Eigen::VectorXd r_pose_current(6); 
+        r_pose_current << rd_.link_[Right_Hand].xpos(0), rd_.link_[Right_Hand].xpos(1), rd_.link_[Right_Hand].xpos(2), rr_, rp_, ry_;
+
+        Eigen::VectorXd r_pose_desired(6); 
+        r_pose_desired << hand_r_pos_desired(0), hand_r_pos_desired(1), hand_r_pos_desired(2), drr_, drp_, dry_;
+
+        Eigen::VectorXd r_rot_diff(3); 
+        r_rot_diff = DyrosMath::getPhi(rd_.link_[Right_Hand].rotm, hand_r_rot_desired);
+
+        Eigen::VectorXd r_pose_error(6); 
+        r_pose_error = r_pose_desired - r_pose_current;
+        r_pose_error(3)=-r_rot_diff(0);
+        r_pose_error(4)=-r_rot_diff(1);
+        r_pose_error(5)=-r_rot_diff(2);
+
+        Eigen::MatrixXd JtJ_r= J_r_arm.transpose() * J_r_arm;
+
+        Eigen::VectorXd Kp_r_(6);
+        // Kp_r_ << 2.0, 2.0, 2.0, 1.5, 1.5, 1.5; 
+        Kp_r_ << 1.5, 1.5, 1.5, 1.5, 1.5, 1.5; 
+
+        Eigen::MatrixXd dq_r = JtJ_r.ldlt().solve(J_r_arm.transpose() * Kp_r_.cwiseProduct(r_pose_error));
+
+        for(int i=0; i<8; i++)
+        {
+            desired_qdot_[MODEL_DOF-8+i] = dq_r(i);
+            desired_q_[MODEL_DOF-8+i] += dq_r(i) * 0.0005;
+        }
+
+        // for (int i = 0; i < MODEL_DOF; i++){
+        //     rd_.torque_desired[i] = rd_.pos_kp_v[i] * (desired_q_[i] - rd_.q_[i]) + rd_.pos_kv_v[i] * (desired_qdot_[i] - rd_.q_dot_[i]);
+        // }
+
+        // 필터 초기값 설정
+        for (int i = 0; i < MODEL_DOF; i++) {
+            filtered_qdot_[i] = desired_qdot_[i];
+            filtered_q_[i] = desired_q_[i];
+        }
+
+        // 기존 코드 ...
+        for (int i = 0; i < 8; i++)
+        {
+            desired_qdot_[MODEL_DOF - 8 + i] = dq_r(i);
+            // 필터 적용
+            filtered_qdot_[MODEL_DOF - 8 + i] = alpha * desired_qdot_[MODEL_DOF - 8 + i] + (1 - alpha) * filtered_qdot_[MODEL_DOF - 8 + i];
+            
+            desired_q_[MODEL_DOF - 8 + i] += dq_r(i) * 0.0005;
+            // 필터 적용
+            filtered_q_[MODEL_DOF - 8 + i] = alpha * desired_q_[MODEL_DOF - 8 + i] + (1 - alpha) * filtered_q_[MODEL_DOF - 8 + i];
+        }
+
+        // 나머지 코드 ...
+        for (int i = 0; i < MODEL_DOF; i++){
+            rd_.torque_desired[i] = rd_.pos_kp_v[i] * (filtered_q_[i] - rd_.q_[i]) + rd_.pos_kv_v[i] * (filtered_qdot_[i] - rd_.q_dot_[i]);
+        }
+        rd_.torque_desired = rd_.torque_desired + WBC::ContactForceRedistributionTorque(rd_, WBC::GravityCompensationTorque(rd_));
+
+        init_qp = false;
     }
 
 }
@@ -292,8 +407,8 @@ void CustomController::resetRobotPose(double duration)
         rd_.torque_desired[i] = rd_.pos_kp_v[i] * (q_cubic[i] - rd_.q_[i]) - rd_.pos_kv_v[i] * rd_.q_dot_[i];
     }
 
-    WBC::SetContact(rd_, rd_.tc_.left_foot, rd_.tc_.right_foot, rd_.tc_.left_hand, rd_.tc_.right_hand);
-    rd_.torque_desired =  rd_.torque_desired +  WBC::GravityCompensationTorque(rd_);
+    WBC::SetContact(rd_, 1, 1);
+    rd_.torque_desired =  rd_.torque_desired + WBC::ContactForceRedistributionTorque(rd_, WBC::GravityCompensationTorque(rd_));
 }
 
 
@@ -317,13 +432,14 @@ void CustomController::ModeCallback(const std_msgs::Int32Ptr &msg)
     else if (msg->data == 1) {
         rd_.tc_.mode = 7;
         rd_.tc_init = true;
+        desired_q_ = rd_.q_;
     }
 }
 
 void CustomController::JointTargetCallback(const sensor_msgs::JointStatePtr &msg)
 {
     t_0_ = rd_.control_time_;
-    q_0_ = rd_.q_;
+    q_0_ = desired_q_;
     qdot_0_ = rd_.q_dot_;
     joint_names_ = msg->name;
     joint_target_ = msg->position;
@@ -358,4 +474,12 @@ void CustomController::computePlanner()
 void CustomController::copyRobotData(RobotData &rd_l)
 {
     std::memcpy(&rd_cc_, &rd_l, sizeof(RobotData));
+}
+
+Eigen::MatrixXd CustomController::LowPassFilter(const Eigen::MatrixXd &input, const Eigen::MatrixXd &prev_res, const double &sampling_freq, const double &cutoff_freq)
+{
+    double rc = 1. / (cutoff_freq * 2 * M_PI);
+    double dt = 1. / sampling_freq;
+    double a = dt / (rc + dt);
+    return prev_res + a * (input - prev_res);
 }
