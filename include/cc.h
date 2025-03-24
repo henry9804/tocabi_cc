@@ -68,8 +68,8 @@ public:
     Eigen::VectorQd desired_qdot_;
     std::vector<trajectory_msgs::JointTrajectoryPoint> points;
     bool init_time = false;
-    int traj_index = -1;
-    int num_waypoint = -1;
+    int traj_index = 0;
+    int num_waypoint = 0;
 
     bool target_received = false;
     double t_0_;
@@ -90,7 +90,7 @@ public:
     
     std::string folderPath, filePath_hand, filePath_joint, filePath_info;   // for hand pose and joint
     std::string folderPath_image, fileName_image, filePath_image;           // for images
-    std::ofstream fout, fout2, fout3;
+    std::ofstream fout1, fout2, fout3;
 
     // float pos_x_;
 
@@ -112,6 +112,9 @@ public:
     float distance_hand2obj;
     int prev_mode = 8;
 
+    Eigen::Matrix<double, MODEL_DOF, MODEL_DOF> kp;
+    Eigen::Matrix<double, MODEL_DOF, MODEL_DOF> kv;
+    
 private:
     Eigen::VectorQd ControlVal_;
     map<std::string, int> JOINT_INDEX;
