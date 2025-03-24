@@ -40,7 +40,7 @@ public:
     void PublishHapticData();
 
     void HapticPoseCallback(const geometry_msgs::PoseConstPtr &msg);
-    void CupPoseCallback(const geometry_msgs::PoseConstPtr &msg);
+    void ObjPoseCallback(const geometry_msgs::PoseConstPtr &msg);
     void JointTrajectoryCallback(const trajectory_msgs::JointTrajectoryPtr &msg);
     void JointTargetCallback(const sensor_msgs::JointStatePtr &msg);
     Eigen::Matrix3d Quat2rotmatrix(double q0, double q1, double q2, double q3);
@@ -58,12 +58,12 @@ public:
     ros::Subscriber joint_trajectory_sub;
     ros::Subscriber joint_target_sub;
     ros::Publisher haptic_force_pub_;
-    ros::Subscriber cup_pose_sub;
+    ros::Subscriber obj_pose_sub;
     
     Eigen::Vector3d haptic_pos_;
     Eigen::Vector4d haptic_ori_;
     Eigen::Matrix3d haptic_orientation_;
-    Eigen::Vector3d cup_pos_;
+    Eigen::Vector3d obj_pos_;
     Eigen::VectorQd desired_q_;
     Eigen::VectorQd desired_qdot_;
     std::vector<trajectory_msgs::JointTrajectoryPoint> points;

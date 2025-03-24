@@ -1,8 +1,8 @@
 #include "cc.h"
 
 std::default_random_engine generator;
-ros::Publisher new_cup_pos_pub;
-geometry_msgs::Point new_cup_pos_msg_;
+ros::Publisher new_obj_pose_pub;
+geometry_msgs::Pose new_obj_pose_msg_;
 ros::Time init;
 
 using namespace TOCABI;
@@ -12,7 +12,7 @@ CustomController::CustomController(RobotData &rd) : rd_(rd) //, wbc_(dc.wbc_)
 {
     nh_cc_.setCallbackQueue(&queue_cc_);
     haptic_pose_sub_ = nh_cc_.subscribe("/haptic/pose", 1, &CustomController::HapticPoseCallback, this);
-    cup_pose_sub = nh_cc_.subscribe("/cup_pose", 1, &CustomController::CupPoseCallback, this);
+    obj_pose_sub = nh_cc_.subscribe("/obj_pose", 1, &CustomController::ObjPoseCallback, this);
     joint_trajectory_sub = nh_cc_.subscribe("/tocabi/srmt/trajectory", 1, &CustomController::JointTrajectoryCallback, this);
     joint_target_sub = nh_cc_.subscribe("/tocabi/act/joint_target", 1, &CustomController::JointTargetCallback, this);
     haptic_force_pub_ = nh_cc_.advertise<geometry_msgs::Vector3>("/haptic/force", 10);
@@ -20,7 +20,7 @@ CustomController::CustomController(RobotData &rd) : rd_(rd) //, wbc_(dc.wbc_)
     image_transport::ImageTransport it(nh_cc_);
     camera_flag_pub = nh_cc_.advertise<std_msgs::Bool>("/mujoco_ros_interface/camera/flag", 1);
     camera_image_sub = it.subscribe("/mujoco_ros_interface/camera/image", 1, &CustomController::camera_img_callback, this);
-    new_cup_pos_pub = nh_cc_.advertise<geometry_msgs::Point>("/new_cup_pos", 1);
+    new_obj_pose_pub = nh_cc_.advertise<geometry_msgs::Pose>("/new_obj_pose", 1);
     terminate_pub = nh_cc_.advertise<std_msgs::Bool>("/tocabi/act/terminate", 1);
     hand_open_pub = nh_cc_.advertise<std_msgs::Int32>("/mujoco_ros_interface/hand_open", 1);
 
@@ -115,7 +115,7 @@ void CustomController::computeSlow()
 {
     //MODE 6,7,8,9 is reserved for cc
     //MODE 6: joint target tracking for ACT
-    //MODE 7: Homing & new cup pose
+    //MODE 7: Homing & new obj pose
     //MODE 8: joint trajectory tracking for RRT & data collection
     //MODE 9: GUI end-effector pose tracking w/ HQP
     queue_cc_.callAvailable(ros::WallDuration());
@@ -187,8 +187,8 @@ void CustomController::computeSlow()
             filePathSS_info << folderPath << "/info.txt";
             filePath_info = filePathSS_info.str();
             fout3.open(filePath_info);
-            fout3 << "cup_pose_x" << "\t" << "cup_pose_y" << "\t" << "cup_pose_z" << "\t" << "success" << endl;
-            fout3 << cup_pos_(0) << "\t" << cup_pos_(1) << "\t" << cup_pos_(2) << "\t";
+            fout3 << "obj_pose_x" << "\t" << "obj_pose_y" << "\t" << "obj_pose_z" << "\t" << "success" << endl;
+            fout3 << obj_pos_(0) << "\t" << obj_pos_(1) << "\t" << obj_pos_(2) << "\t";
             if(!fout3.is_open()){
                 ROS_ERROR("Couldn't open text file3");
             }
@@ -199,13 +199,13 @@ void CustomController::computeSlow()
                 data_collect_start_ = true;
                 init = ros::Time::now();
             }
-            // compute current distance between hand and cup for terminal condition check
+            // compute current distance between hand and obj for terminal condition check
             Eigen::Vector3d rhand_pos_;
             rhand_pos_ << rd_.link_[Right_Hand].xpos;
             
-            float dx = cup_pos_(0) - rhand_pos_(0);
-            float dy = cup_pos_(1) - rhand_pos_(1);
-            float dz = cup_pos_(2) - rhand_pos_(2);
+            float dx = obj_pos_(0) - rhand_pos_(0);
+            float dy = obj_pos_(1) - rhand_pos_(1);
+            float dz = obj_pos_(2) - rhand_pos_(2);
             distance_hand2obj = std::sqrt(dx*dx + dy*dy + dz*dz);
 
             WBC::SetContact(rd_, rd_.tc_.left_foot, rd_.tc_.right_foot, rd_.tc_.left_hand, rd_.tc_.right_hand);
@@ -297,10 +297,16 @@ void CustomController::computeSlow()
             const double minY = -0.3;
             const double maxY = 0.3;
 
-            new_cup_pos_msg_.x = getRandomPosition(minX, maxX);
-            new_cup_pos_msg_.y = getRandomPosition(minY, maxY);
-            new_cup_pos_msg_.z = 0.0;
-            new_cup_pos_pub.publish(new_cup_pos_msg_);
+            new_obj_pose_msg_.position.x = getRandomPosition(minX, maxX);
+            new_obj_pose_msg_.position.y = getRandomPosition(minY, maxY);
+            new_obj_pose_msg_.position.z = 0.0;
+            double yaw = getRandomPosition(0, 0.5);
+            Eigen::Quaterniond quaternion(DyrosMath::rotateWithZ(yaw));
+            new_obj_pose_msg_.orientation.x = quaternion.coeffs()[0];
+            new_obj_pose_msg_.orientation.y = quaternion.coeffs()[1];
+            new_obj_pose_msg_.orientation.z = quaternion.coeffs()[2];
+            new_obj_pose_msg_.orientation.w = quaternion.coeffs()[3];
+            new_obj_pose_pub.publish(new_obj_pose_msg_);
 
             rd_.tc_.mode = prev_mode;
             target_reached_ = false;
@@ -367,22 +373,22 @@ void CustomController::computeSlow()
             filePathSS_info << folderPath << "/info.txt";
             filePath_info = filePathSS_info.str();
             fout3.open(filePath_info);
-            fout3 << "cup_pose_x" << "\t" << "cup_pose_y" << "\t" << "cup_pose_z" << "\t" << "success" << endl;
-            fout3 << cup_pos_(0) << "\t" << cup_pos_(1) << "\t" << cup_pos_(2) << "\t";
+            fout3 << "obj_pose_x" << "\t" << "obj_pose_y" << "\t" << "obj_pose_z" << "\t" << "success" << endl;
+            fout3 << obj_pos_(0) << "\t" << obj_pos_(1) << "\t" << obj_pos_(2) << "\t";
             if(!fout3.is_open()){
                 ROS_ERROR("Couldn't open text file3");
             }
         }
             
         if(data_collect_start_){
-            // compute current distance between hand and cup for terminal condition check
-            Eigen::Vector3d rhand_pos_;
-            rhand_pos_ << rd_.link_[Right_Hand].xpos;
+            // compute current distance between hand and obj grasp target for terminal condition check
+            // Eigen::Vector3d rhand_pos_;
+            // rhand_pos_ << rd_.link_[Right_Hand].xpos;
             
-            float dx = cup_pos_(0) - rhand_pos_(0);
-            float dy = cup_pos_(1) - rhand_pos_(1);
-            float dz = cup_pos_(2) - rhand_pos_(2);
-            distance_hand2obj = std::sqrt(dx*dx + dy*dy + dz*dz);
+            // float dx = (obj_pos_(0) - 0.11) - rhand_pos_(0);
+            // float dy = (obj_pos_(1) - 0.07) - rhand_pos_(1);
+            // float dz = (obj_pos_(2) + 0.10) - rhand_pos_(2);
+            // distance_hand2obj = std::sqrt(dx*dx + dy*dy + dz*dz);
 
             WBC::SetContact(rd_, rd_.tc_.left_foot, rd_.tc_.right_foot, rd_.tc_.left_hand, rd_.tc_.right_hand);
             // rd_.torque_grav = WBC::GravityCompensationTorque(rd_);
@@ -581,9 +587,9 @@ void CustomController::resetRobotPose(double duration)
     q_target << 0.0, 0.0, -0.24, 0.6, -0.36, 0.0,
             0.0, 0.0, -0.24, 0.6, -0.36, 0.0,
             0.0, 0.0, 0.0,
-            0.3, 0.3, 1.5, -1.27, -1.0, 0.0, -1.0, 0.0,
-            0.0, 0.0,
-            -0.3, -0.9, -1.5, 1.57, 1.9, 0.0, 0.5, 0.0;
+            0.3, 0.3, 1.5, -1.27, -1, 0.0, -1, 0.0,
+            0.0, 0.3,
+            0.0, 0.3, -1.57, 1.2, 1.57, -1.5, -0.4, 0.2;
     for (int i = 0; i <MODEL_DOF; i++)
     {
         q_cubic(i) = DyrosMath::cubic(rd_.control_time_, time_init_, time_init_ +duration, q_init_(i), q_target(i), 0.0, 0.0);
@@ -649,14 +655,14 @@ void CustomController::HapticPoseCallback(const geometry_msgs::PoseConstPtr &msg
 
 }
 
-void CustomController::CupPoseCallback(const geometry_msgs::PoseConstPtr &msg)
+void CustomController::ObjPoseCallback(const geometry_msgs::PoseConstPtr &msg)
 {
-    float cup_x = msg->position.x;
-    float cup_y = msg->position.y;
-    float cup_z = msg->position.z;
+    float obj_x = msg->position.x;
+    float obj_y = msg->position.y;
+    float obj_z = msg->position.z;
  
-    cup_pos_ << cup_x, cup_y, cup_z;
-    // std::cout << "CupPos subscribed!" << std::endl;
+    obj_pos_ << obj_x, obj_y, obj_z;
+    // std::cout << "Obj Pose subscribed!" << std::endl;
 }
 
 void CustomController::JointTrajectoryCallback(const trajectory_msgs::JointTrajectoryPtr &msg)
