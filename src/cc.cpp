@@ -84,10 +84,11 @@ bool CustomController::saveImage(const sensor_msgs::ImageConstPtr &image_msg) {
     }
 
     if (!image.empty()) {
-        std::ostringstream oss;
-        oss << std::setw(9) << std::setfill('0') << t_.nsec;
+        // std::ostringstream oss;
+        // oss << std::setw(9) << std::setfill('0') << t_.nsec;
         std::stringstream fileNameSS;
-        fileNameSS << "image_" << camera_tick_ << "_" << t_.sec << "_" << oss.str() << ".jpg";
+        // fileNameSS << "image_" << camera_tick_ << "_" << t_.sec << "_" << oss.str() << ".jpg";
+        fileNameSS << "image_" << camera_tick_ << ".jpg";
         fileName_image = fileNameSS.str();
 
         std::stringstream filePathSS;
@@ -118,15 +119,17 @@ void CustomController::camera_img_callback(const sensor_msgs::ImageConstPtr &msg
 
             double t_ = (ros::Time::now() - init).toSec();
 
+            Eigen::Quaterniond hand_quat(rd_.link_[Right_Hand].rotm);
+            Eigen::Quaterniond head_quat(rd_.link_[Head].rotm);
             // write data to the file
-            fout1 << camera_tick_ << "\t" << t_ << "\t"
+            fout1 << t_ << "\t"
                 << rd_.link_[Right_Hand].xpos(0) << "\t" << rd_.link_[Right_Hand].xpos(1) << "\t" << rd_.link_[Right_Hand].xpos(2) << "\t" 
-                << rd_.link_[Right_Hand].roll << "\t"<< rd_.link_[Right_Hand].pitch << "\t"<< rd_.link_[Right_Hand].yaw << "\t" 
+                << hand_quat.coeffs()[0] << "\t"<< hand_quat.coeffs()[1] << "\t" << hand_quat.coeffs()[2] << "\t" << hand_quat.coeffs()[3] << "\t" 
                 << rd_.link_[Head].xpos(0) << "\t" << rd_.link_[Head].xpos(1) << "\t" << rd_.link_[Head].xpos(2) << "\t" 
-                << rd_.link_[Head].roll << "\t"<< rd_.link_[Head].pitch << "\t"<< rd_.link_[Head].yaw << "\t"
+                << head_quat.coeffs()[0] << "\t"<< head_quat.coeffs()[1] << "\t" << head_quat.coeffs()[2] << "\t" << head_quat.coeffs()[3] << "\t" 
                 << hand_open_msg.data << endl;
             
-            fout2 << camera_tick_ << "\t" << t_ << "\t";
+            fout2 << t_ << "\t";
             for(int i = 0; i < MODEL_DOF; i++){
                 fout2 << rd_.q_[i] << "\t";
             }
@@ -402,9 +405,9 @@ void CustomController::computeSlow()
             fout1.open(filePath_hand);
             fout1 << "camera_tick" << "\t" << "ros_time" << "\t" 
                 << "hand_pose_x" << "\t" << "hand_pose_y" << "\t" << "hand_pose_z" << "\t" 
-                << "hand_pose_roll" << "\t" << "hand_pose_pitch" << "\t" << "hand_pose_yaw" << "\t" 
+                << "hand_pose_qx" << "\t" << "hand_pose_qy" << "\t" << "hand_pose_qz" << "hand_pose_qw" << "\t" 
                 << "head_pose_x" << "\t" << "head_pose_y" << "\t" << "heand_pose_z" << "\t" 
-                << "head_pose_roll" << "\t" << "head_pose_pitch" << "\t" << "head_pose_yaw" << "\t" 
+                << "head_pose_qx" << "\t" << "head_pose_qy" << "\t" << "head_pose_qz" << "head_pose_qw" << "\t" 
                 << "hand_open_state" << endl; 
             if(!fout1.is_open()){
                 ROS_ERROR("Couldn't open text file1");
@@ -426,7 +429,6 @@ void CustomController::computeSlow()
             filePath_info = filePathSS_info.str();
             fout3.open(filePath_info);
             fout3 << "obj_pose_x" << "\t" << "obj_pose_y" << "\t" << "obj_pose_z" << "\t" << "success" << endl;
-            fout3 << obj_pos_(0) << "\t" << obj_pos_(1) << "\t" << obj_pos_(2) << "\t";
             if(!fout3.is_open()){
                 ROS_ERROR("Couldn't open text file3");
             }
@@ -666,6 +668,7 @@ void CustomController::JointTrajectoryCallback(const trajectory_msgs::JointTraje
     data_collect_start_ = true;
     camera_tick_ = 0;
     init = ros::Time::now();
+    fout3 << obj_pos_(0) << "\t" << obj_pos_(1) << "\t" << obj_pos_(2) << "\t";
 }
 
 void CustomController::JointTargetCallback(const sensor_msgs::JointStatePtr &msg)
