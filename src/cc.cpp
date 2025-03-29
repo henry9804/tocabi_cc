@@ -15,6 +15,7 @@ CustomController::CustomController(RobotData &rd) : rd_(rd) //, wbc_(dc.wbc_)
     obj_pose_sub = nh_cc_.subscribe("/obj_pose", 1, &CustomController::ObjPoseCallback, this);
     joint_trajectory_sub = nh_cc_.subscribe("/tocabi/srmt/trajectory", 1, &CustomController::JointTrajectoryCallback, this);
     joint_target_sub = nh_cc_.subscribe("/tocabi/act/joint_target", 1, &CustomController::JointTargetCallback, this);
+    pose_target_sub = nh_cc_.subscribe("/tocabi/act/pose_target", 1, &CustomController::PoseTargetCallback, this);
     haptic_force_pub_ = nh_cc_.advertise<geometry_msgs::Vector3>("/haptic/force", 10);
     ControlVal_.setZero();
     image_transport::ImageTransport it(nh_cc_);
@@ -42,6 +43,8 @@ CustomController::CustomController(RobotData &rd) : rd_(rd) //, wbc_(dc.wbc_)
                     10.0, 28.0, 10.0, 10.0, 10.0, 10.0, 3.0, 3.0,
                     2.0, 2.0,
                     10.0, 28.0, 10.0, 10.0, 10.0, 10.0, 3.0, 3.0;
+
+    qp_cartesian_velocity_ = std::make_unique<QP::CartesianVelocity>();
 }
 
 Eigen::VectorQd CustomController::getControl()
@@ -160,7 +163,7 @@ void CustomController::computeSlow()
     //MODE 6: joint target tracking for ACT
     //MODE 7: Homing & new obj pose
     //MODE 8: joint trajectory tracking for RRT & data collection
-    //MODE 9: GUI end-effector pose tracking w/ HQP
+    //MODE 9: right hand task space control with QP by jh
     queue_cc_.callAvailable(ros::WallDuration());
 
     
@@ -472,123 +475,57 @@ void CustomController::computeSlow()
         // torque PD control
         rd_.torque_desired =  kp * (desired_q_ - rd_.q_) + kv * (desired_qdot_ - rd_.q_dot_);
     }
-
-    if (rd_.tc_.mode == 9)
+    
+    else if (rd_.tc_.mode == 9)
     {
-        double ang2rad = 0.0174533;
-
-        static bool init_qp;
-        
-        static VectorQd init_q_mode6;
-
-        static Matrix3d rot_hand_init;
-        static Matrix3d rot_haptic_init;
-
-        static Vector3d pos_hand_init;
-        static Vector3d pos_haptic_init;
-
-
-        if (rd_.tc_init) //한번만 실행됩니다(gui)
-        {
-            init_qp = true;
-
+        cc_timer_.reset();
+        if (rd_.tc_init){
             std::cout << "mode 9 init!" << std::endl;
             rd_.tc_init = false;
-            rd_.link_[COM_id].x_desired = rd_.link_[COM_id].x_init;
-
-            init_q_mode6 = rd_.q_;
-
-            rot_hand_init = rd_.link_[Right_Hand].rotm;
-            pos_hand_init = rd_.link_[Right_Hand].xpos;
+            
+            rhand_pos_init_ = rd_.link_[Right_Hand].xpos;
+            rhand_rot_init_ = rd_.link_[Right_Hand].rotm;
+            
+            desired_q_ = rd_.q_;
+            desired_qdot_.setZero();
+            target_received = false;
         }
 
-        WBC::SetContact(rd_, rd_.tc_.left_foot, rd_.tc_.right_foot, rd_.tc_.left_hand, rd_.tc_.right_hand);
-        if (rd_.tc_.customTaskGain)
+        // get desired pose from GUI taskcommand msg
+        if (!target_received){
+            Vector3d rhand_pos_desired_l;
+            rhand_pos_desired_l << rd_.tc_.r_x, rd_.tc_.r_y, rd_.tc_.r_z;
+            rhand_target_pos_ = rhand_pos_init_ + rhand_pos_desired_l;
+            rhand_target_rotm_ = DyrosMath::rotateWithX(rd_.tc_.r_roll * DEG2RAD) * DyrosMath::rotateWithY(rd_.tc_.r_pitch * DEG2RAD) * DyrosMath::rotateWithZ(rd_.tc_.r_yaw * DEG2RAD) * DyrosMath::Euler2rot(0, M_PI_2, M_PI).transpose();
+        }
+        // else get desired pose from /tocabi/act/pose_target topic callback
+
+        // set QP problem
+        Eigen::Vector6d desired_xdot;
+        desired_xdot.head(3) = rhand_target_pos_ - rd_.link_[Right_Hand].xpos;
+        desired_xdot.tail(3) = DyrosMath::getPhi(rhand_target_rotm_, rd_.link_[Right_Hand].rotm);
+        qp_cartesian_velocity_->setCurrentState(rd_.q_.tail(8), rd_.q_dot_.tail(8), rd_.link_[Right_Hand].Jac().block(0, 31, 6, 8));
+        qp_cartesian_velocity_->setDesiredEEVel(desired_xdot);
+
+        // solve QP
+        Eigen::Matrix<double, 8, 1> opt_qdot;
+        QP::TimeDuration time_status;
+        int status = qp_cartesian_velocity_->getOptJointVel(opt_qdot, time_status);
+        if(status != 0)
         {
-            rd_.link_[Pelvis].SetGain(rd_.tc_.pos_p, rd_.tc_.pos_d, rd_.tc_.acc_p, rd_.tc_.ang_p, rd_.tc_.ang_d, 1);
-            rd_.link_[Upper_Body].SetGain(rd_.tc_.pos_p, rd_.tc_.pos_d, rd_.tc_.acc_p, rd_.tc_.ang_p, rd_.tc_.ang_d, 1);
-            rd_.link_[Right_Hand].SetGain(rd_.tc_.pos_p, rd_.tc_.pos_d, rd_.tc_.acc_p, rd_.tc_.ang_p, rd_.tc_.ang_d, 1);
+            ROS_INFO("QP did not solved!!!");
+            std::cout << "\t\t\t\t error code: " << status << std::endl;
         }
 
-        rd_.link_[Pelvis].x_desired = rd_.tc_.ratio * rd_.link_[Left_Foot].x_init + (1 - rd_.tc_.ratio) * rd_.link_[Right_Foot].x_init;
-        rd_.link_[Pelvis].x_desired(2) = rd_.tc_.height;
-        rd_.link_[Pelvis].rot_desired = DyrosMath::rotateWithY(rd_.tc_.pelv_pitch * ang2rad) * DyrosMath::rotateWithZ(rd_.link_[Pelvis].yaw_init);
+        desired_qdot_.tail(8) = opt_qdot;        
+        desired_q_ += desired_qdot_ / hz_;
 
-        rd_.link_[Right_Hand].x_desired = rd_.link_[Right_Hand].x_init;
-        rd_.link_[Right_Hand].x_desired(0) += rd_.tc_.r_x;
-        rd_.link_[Right_Hand].x_desired(1) += rd_.tc_.r_y;
-        rd_.link_[Right_Hand].x_desired(2) += rd_.tc_.r_z;
-        rd_.link_[Right_Hand].rot_desired = DyrosMath::rotateWithX(rd_.tc_.r_roll * ang2rad) * DyrosMath::rotateWithY(rd_.tc_.r_pitch * ang2rad) * DyrosMath::rotateWithZ(rd_.tc_.r_yaw * ang2rad) * DyrosMath::Euler2rot(0, 1.5708, -1.5708).transpose();
+        // torque PD control
+        rd_.torque_desired =  kp * (desired_q_ - rd_.q_) + kv * (desired_qdot_ - rd_.q_dot_);
 
-        rd_.link_[Upper_Body].rot_desired = DyrosMath::rotateWithX(rd_.tc_.roll * ang2rad) * DyrosMath::rotateWithY(rd_.tc_.pitch * ang2rad) * DyrosMath::rotateWithZ(rd_.tc_.yaw * ang2rad);
-
-        rd_.link_[Pelvis].SetTrajectoryQuintic(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Pelvis].xi_init, rd_.link_[Pelvis].x_desired);
-        rd_.link_[Pelvis].SetTrajectoryRotation(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time);
-
-        Vector3d hand_pos_desired = rd_.link_[Right_Hand].x_desired;
-        Matrix3d hand_rot_desired = rot_hand_init;
-
-        rd_.link_[Right_Hand].SetTrajectoryQuintic(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, hand_pos_desired);
-        
-        rd_.link_[Upper_Body].SetTrajectoryRotation(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time);
-
-        rd_.torque_grav = WBC::GravityCompensationTorque(rd_);
-        TaskSpace ts_(6);
-        Eigen::MatrixXd Jtask = rd_.link_[Pelvis].JacCOM();
-        Eigen::VectorXd fstar = WBC::GetFstar6d(rd_.link_[Pelvis], true, true);
-
-        ts_.Update(Jtask, fstar);
-        WBC::CalcJKT(rd_, ts_);
-        WBC::CalcTaskNull(rd_, ts_);
-        static CQuadraticProgram task_qp_;
-        WBC::TaskControlHQP(rd_, ts_, task_qp_, rd_.torque_grav, MatrixXd::Identity(MODEL_DOF, MODEL_DOF), init_qp);
-
-        VectorQd torque_Task2 = ts_.torque_h_ + rd_.torque_grav;
-
-        TaskSpace ts1_(6);
-        Eigen::MatrixXd Jtask1 = rd_.link_[Right_Hand].Jac();
-        Eigen::VectorXd fstar1 = WBC::GetFstar6d(rd_.link_[Right_Hand], true);
-
-        ts1_.Update(Jtask1, fstar1);
-        WBC::CalcJKT(rd_, ts1_);
-        WBC::CalcTaskNull(rd_, ts1_);
-        static CQuadraticProgram task_qp1_;
-        WBC::TaskControlHQP(rd_, ts1_, task_qp1_, torque_Task2, ts_.Null_task, init_qp);
-
-        torque_Task2 = ts_.torque_h_ + ts_.Null_task * ts1_.torque_h_ + rd_.torque_grav;
-
-        TaskSpace ts2_(3);
-        Eigen::MatrixXd Jtask2 = rd_.link_[Upper_Body].Jac().bottomRows(3);
-        Eigen::VectorXd fstar2 = WBC::GetFstarRot(rd_.link_[Upper_Body]);
-        ts2_.Update(Jtask2, fstar2);
-        WBC::CalcJKT(rd_, ts2_);
-
-        static CQuadraticProgram task_qp2_;
-        WBC::TaskControlHQP(rd_, ts2_, task_qp2_, torque_Task2, ts_.Null_task * ts1_.Null_task, init_qp);
-
-        torque_Task2 = ts_.torque_h_ + ts_.Null_task * ts1_.torque_h_ + ts_.Null_task * ts1_.Null_task * ts2_.torque_h_ + rd_.torque_grav;
-
-        VectorQd torque_pos_hold;
-
-        for (int i=0;i<MODEL_DOF;i++)
-        {
-            torque_pos_hold[i] = rd_.pos_kp_v[i] * (init_q_mode6[i] - rd_.q_[i]) + rd_.pos_kv_v[i] * ( - rd_.q_dot_[i]);
-        }
-
-        torque_pos_hold.segment(25,8).setZero();
-
-        VectorQd torque_right_arm;
-        
-        torque_right_arm.setZero();
-
-        torque_right_arm.segment(25,8) = WBC::ContactForceRedistributionTorque(rd_, torque_Task2).segment(25,8);
-
-        for (int i=12;i<MODEL_DOF;i++)
-        {
-            rd_.torque_desired[i] = torque_pos_hold[i] + torque_right_arm[i];
-        }
-    }
-
+        double elapsed_time = cc_timer_.elapsedAndReset();
+        // cout << elapsed_time * 1000 << " ms" << endl;
+    } 
 }
 
 void CustomController::resetRobotPose(double duration)
@@ -678,6 +615,13 @@ void CustomController::JointTargetCallback(const sensor_msgs::JointStatePtr &msg
     qdot_0_ = rd_.q_dot_;
     joint_names_ = msg->name;
     joint_target_ = msg->position;
+    target_received = true;
+}
+
+void CustomController::PoseTargetCallback(const geometry_msgs::PosePtr &msg)
+{
+    rhand_target_pos_ << msg->position.x, msg->position.y, msg->position.z;
+    rhand_target_rotm_ = CustomController::Quat2rotmatrix(msg->orientation.w, msg->orientation.x, msg->orientation.y, msg->orientation.z);
     target_received = true;
 }
 
