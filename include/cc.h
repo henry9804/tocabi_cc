@@ -1,6 +1,7 @@
 #include "tocabi_lib/robot_data.h"
 #include "wholebody_functions.h"
 #include "geometry_msgs/Pose.h"
+#include "geometry_msgs/PoseArray.h"
 #include "geometry_msgs/PoseStamped.h"
 #include "geometry_msgs/Vector3.h"
 #include "trajectory_msgs/JointTrajectory.h"
@@ -88,6 +89,9 @@ public:
     ros::Publisher hand_open_pub;
     std_msgs::Int32 hand_open_msg;
 
+    void publishHandPoses();
+    ros::Publisher hand_poses_pub;
+    geometry_msgs::PoseArray hand_poses_msg;
 
     void resetRobotPose(double duration);
     bool target_reached_ = false;
