@@ -19,8 +19,8 @@ CustomController::CustomController(RobotData &rd) : rd_(rd) //, wbc_(dc.wbc_)
     haptic_force_pub_ = nh_cc_.advertise<geometry_msgs::Vector3>("/haptic/force", 10);
     ControlVal_.setZero();
     image_transport::ImageTransport it(nh_cc_);
-    hand_poses_pub = nh_cc_.advertise<geometry_msgs::PoseArray>("/tocabi/handposes", 1);
-    hand_poses_msg.poses.resize(2);
+    robot_pose_pub = nh_cc_.advertise<geometry_msgs::PoseArray>("/tocabi/robot_poses", 1);
+    robot_pose_msg.poses.resize(3);
     camera_image_sub = it.subscribe("/mujoco_ros_interface/camera/image", 1, &CustomController::camera_img_callback, this);
     new_obj_pose_pub = nh_cc_.advertise<geometry_msgs::Pose>("/new_obj_pose", 1);
     terminate_pub = nh_cc_.advertise<std_msgs::Bool>("/tocabi/act/terminate", 1);
@@ -167,7 +167,7 @@ void CustomController::computeSlow()
     //MODE 8: joint trajectory tracking for RRT & data collection
     //MODE 9: right hand task space control with QP by jh
     queue_cc_.callAvailable(ros::WallDuration());
-    publishHandPoses();
+    publishRobotPoses();
     
     if (rd_.tc_.mode == 6)
     {
@@ -646,30 +646,39 @@ float CustomController::PositionMapping(float haptic_val, int i)
     
 }
 
-void CustomController::publishHandPoses()
+void CustomController::publishRobotPoses()
 {
-    hand_poses_msg.header.stamp = ros::Time::now();
-    hand_poses_msg.header.frame_id = "world";
-
-    hand_poses_msg.poses[0].position.x = rd_.link_[Right_Hand].xpos(0);
-    hand_poses_msg.poses[0].position.y = rd_.link_[Right_Hand].xpos(1);
-    hand_poses_msg.poses[0].position.z = rd_.link_[Right_Hand].xpos(2);
-    Eigen::Quaterniond quat_rhand(rd_.link_[Right_Hand].rotm);
-    hand_poses_msg.poses[0].orientation.x = quat_rhand.x();
-    hand_poses_msg.poses[0].orientation.y = quat_rhand.y();
-    hand_poses_msg.poses[0].orientation.z = quat_rhand.z();
-    hand_poses_msg.poses[0].orientation.w = quat_rhand.w();
-    
-    hand_poses_msg.poses[1].position.x = rd_.link_[Left_Hand].xpos(0);
-    hand_poses_msg.poses[1].position.y = rd_.link_[Left_Hand].xpos(1);
-    hand_poses_msg.poses[1].position.z = rd_.link_[Left_Hand].xpos(2);
+    robot_pose_msg.header.stamp = ros::Time::now();
+    robot_pose_msg.header.frame_id = "world";
+    // left hand
+    robot_pose_msg.poses[0].position.x = rd_.link_[Left_Hand].xpos(0);
+    robot_pose_msg.poses[0].position.y = rd_.link_[Left_Hand].xpos(1);
+    robot_pose_msg.poses[0].position.z = rd_.link_[Left_Hand].xpos(2);
     Eigen::Quaterniond quat_lhand(rd_.link_[Left_Hand].rotm);
-    hand_poses_msg.poses[1].orientation.x = quat_lhand.x();
-    hand_poses_msg.poses[1].orientation.y = quat_lhand.y();
-    hand_poses_msg.poses[1].orientation.z = quat_lhand.z();
-    hand_poses_msg.poses[1].orientation.w = quat_lhand.w();
+    robot_pose_msg.poses[0].orientation.x = quat_lhand.x();
+    robot_pose_msg.poses[0].orientation.y = quat_lhand.y();
+    robot_pose_msg.poses[0].orientation.z = quat_lhand.z();
+    robot_pose_msg.poses[0].orientation.w = quat_lhand.w();
+    // head
+    robot_pose_msg.poses[1].position.x = rd_.link_[Head].xpos(0);
+    robot_pose_msg.poses[1].position.y = rd_.link_[Head].xpos(1);
+    robot_pose_msg.poses[1].position.z = rd_.link_[Head].xpos(2);
+    Eigen::Quaterniond q_head(rd_.link_[Head].rotm);
+    robot_pose_msg.poses[1].orientation.x = q_head.x();
+    robot_pose_msg.poses[1].orientation.y = q_head.y();
+    robot_pose_msg.poses[1].orientation.z = q_head.z();
+    robot_pose_msg.poses[1].orientation.w = q_head.w();
+    // right hand
+    robot_pose_msg.poses[2].position.x = rd_.link_[Right_Hand].xpos(0);
+    robot_pose_msg.poses[2].position.y = rd_.link_[Right_Hand].xpos(1);
+    robot_pose_msg.poses[2].position.z = rd_.link_[Right_Hand].xpos(2);
+    Eigen::Quaterniond quat_rhand(rd_.link_[Right_Hand].rotm);
+    robot_pose_msg.poses[2].orientation.x = quat_rhand.x();
+    robot_pose_msg.poses[2].orientation.y = quat_rhand.y();
+    robot_pose_msg.poses[2].orientation.z = quat_rhand.z();
+    robot_pose_msg.poses[2].orientation.w = quat_rhand.w();
 
-    hand_poses_pub.publish(hand_poses_msg);
+    robot_pose_pub.publish(robot_pose_msg);
 }
 
 Eigen::Matrix3d CustomController::Quat2rotmatrix(double q0, double q1, double q2, double q3)

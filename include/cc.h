@@ -89,9 +89,9 @@ public:
     ros::Publisher hand_open_pub;
     std_msgs::Int32 hand_open_msg;
 
-    void publishHandPoses();
-    ros::Publisher hand_poses_pub;
-    geometry_msgs::PoseArray hand_poses_msg;
+    void publishRobotPoses();
+    ros::Publisher robot_pose_pub;
+    geometry_msgs::PoseArray robot_pose_msg;
 
     void resetRobotPose(double duration);
     bool target_reached_ = false;
