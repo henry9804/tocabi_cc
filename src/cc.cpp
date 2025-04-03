@@ -484,6 +484,7 @@ void CustomController::computeSlow()
         if (rd_.tc_init){
             std::cout << "mode 9 init!" << std::endl;
             rd_.tc_init = false;
+            prev_mode = 9;
             
             rhand_pos_init_ = rd_.link_[Right_Hand].xpos;
             rhand_rot_init_ = rd_.link_[Right_Hand].rotm;
@@ -620,10 +621,10 @@ void CustomController::JointTargetCallback(const sensor_msgs::JointStatePtr &msg
     target_received = true;
 }
 
-void CustomController::PoseTargetCallback(const geometry_msgs::PosePtr &msg)
+void CustomController::PoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg)
 {
-    rhand_target_pos_ << msg->position.x, msg->position.y, msg->position.z;
-    rhand_target_rotm_ = CustomController::Quat2rotmatrix(msg->orientation.w, msg->orientation.x, msg->orientation.y, msg->orientation.z);
+    rhand_target_pos_ << msg->pose.position.x, msg->pose.position.y, msg->pose.position.z;
+    rhand_target_rotm_ = CustomController::Quat2rotmatrix(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z);
     target_received = true;
 }
 

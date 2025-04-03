@@ -46,7 +46,7 @@ public:
     void ObjPoseCallback(const geometry_msgs::PoseConstPtr &msg);
     void JointTrajectoryCallback(const trajectory_msgs::JointTrajectoryPtr &msg);
     void JointTargetCallback(const sensor_msgs::JointStatePtr &msg);
-    void PoseTargetCallback(const geometry_msgs::PosePtr &msg);
+    void PoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg);
     Eigen::Matrix3d Quat2rotmatrix(double q0, double q1, double q2, double q3);
     float PositionMapping( float haptic_pos, int i);
     bool saveImage(const sensor_msgs::ImageConstPtr &image_msg);
