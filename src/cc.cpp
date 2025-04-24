@@ -12,12 +12,19 @@ CustomController::CustomController(RobotData &rd) : rd_(rd)
     nh_cc_.setCallbackQueue(&queue_cc_);
     ControlVal_.setZero();
 
+    // for assigning target
+    target_pose_sub_ = nh_cc_.subscribe("/tocabi/target_robot_poses", 1, &CustomController::TargetPosesCallback, this);
+    target_rhand_pose_sub_ = nh_cc_.subscribe("/tocabi/target_rhand_pose", 1, &CustomController::TargetRHandPoseCallback, this);
+
+    // for act (lyh)
+    joint_target_sub_ = nh_cc_.subscribe("/tocabi/act/joint_target", 1, &CustomController::TargetJointCallback, this);
+    pose_target_sub_ = nh_cc_.subscribe("/tocabi/act/pose_target", 1, &CustomController::TargetRHandPoseCallback, this);
+
+    // for data logging
     robot_pose_pub = nh_cc_.advertise<geometry_msgs::PoseArray>("/tocabi/robot_poses", 1);
     robot_pose_msg.poses.resize(3);
     desired_robot_pose_pub_ = nh_cc_.advertise<geometry_msgs::PoseArray>("/tocabi/desired_robot_poses", 1);
     desired_robot_pose_msg_.poses.resize(3);
-    target_pose_sub_ = nh_cc_.subscribe("/tocabi/target_robot_poses", 1, &CustomController::TargetPosesCallback, this);
-    target_rhand_pose_sub_ = nh_cc_.subscribe("/tocabi/target_rhand_pose", 1, &CustomController::TargetRHandPoseCallback, this);
     robot_joint_pub_ = nh_cc_.advertise<sensor_msgs::JointState>("/tocabi/robot_joints", 1);
     desired_joint_pub_ = nh_cc_.advertise<sensor_msgs::JointState>("/tocabi/desired_joints", 1);
 
@@ -37,88 +44,148 @@ CustomController::CustomController(RobotData &rd) : rd_(rd)
                     10.0, 28.0, 10.0, 10.0, 10.0, 10.0, 3.0, 3.0;
 
     qp_cartesian_velocity_ = std::make_unique<QP::CartesianVelocity>();
-    target_robot_poses.resize(4); // left hand, upper body, head, right hand
-    for (auto &pose : target_robot_poses) pose.setIdentity();
+    target_robot_poses_local_.resize(4); // left hand, upper body, head, right hand
+    target_robot_poses_world_.resize(4); // left hand, upper body, head, right hand
+    for (auto &pose : target_robot_poses_local_) pose.setIdentity();
+    for (auto &pose : target_robot_poses_world_) pose.setIdentity();
+
+    for(int i = 0; i < MODEL_DOF; i++)
+    {
+        JOINT_INDEX.insert({JOINT_NAME[i], i});
+    }
+
 }
 
 void CustomController::computeSlow()
 {
-    //MODE 6,7,8 are reserved for cc
-    //MODE 6: ready pose
-    //MODE 7: joint command
-    //MODE 8: task command
+    // MODE 6,7,8 are reserved for cc
+    // MODE 6: joint command
+    // MODE 7: CLIK for right hand
+    // MODE 8: QP for right hand
+    // MODE 9: HQP OSF for upper body, head, right and left hand
     queue_cc_.callAvailable(ros::WallDuration());
+
+    if (rd_.tc_init) //한번만 실행됩니다(gui)
+    {
+        std::cout << "mode" << rd_.tc_.mode << " init!" << std::endl;
+        rd_.tc_init = false;
+
+        rd_.link_[Left_Hand].x_desired = rd_.link_[Left_Hand].x_init;
+        rd_.link_[Right_Hand].x_desired = rd_.link_[Right_Hand].x_init;
+        rd_.link_[Upper_Body].x_desired = rd_.link_[Upper_Body].x_init;
+        rd_.link_[Head].x_desired = rd_.link_[Head].x_init;
+
+        rd_.link_[Left_Hand].rot_desired = rd_.link_[Left_Hand].rot_init;
+        rd_.link_[Right_Hand].rot_desired = rd_.link_[Right_Hand].rot_init;
+        rd_.link_[Head].rot_desired = rd_.link_[Head].rot_init;
+
+        rd_.q_desired = rd_.q_;
+        rd_.q_dot_desired = rd_.q_dot_;
+        q_init_ = rd_.q_;
+
+        // ================== tc_. -> target_robot_poses_local_ ==================
+        // left hand
+        target_robot_poses_local_[0].translation() << rd_.tc_.l_x, 
+                                            rd_.tc_.l_y, 
+                                            rd_.tc_.l_z;
+        target_robot_poses_local_[0].linear() = DyrosMath::rotateWithX(rd_.tc_.l_roll * DEG2RAD) * 
+                                        DyrosMath::rotateWithY(rd_.tc_.l_pitch * DEG2RAD) * 
+                                        DyrosMath::rotateWithZ(rd_.tc_.l_yaw * DEG2RAD);
+
+        // upper body (only for orientation)
+        target_robot_poses_local_[1].translation().setZero();
+        target_robot_poses_local_[1].linear() = DyrosMath::rotateWithX(rd_.tc_.roll * DEG2RAD) * 
+                                        DyrosMath::rotateWithY(rd_.tc_.pitch * DEG2RAD) * 
+                                        DyrosMath::rotateWithZ(rd_.tc_.yaw * DEG2RAD);
+        // head: no input
+
+        // right hand
+        target_robot_poses_local_[3].translation() << rd_.tc_.r_x, 
+                                            rd_.tc_.r_y, 
+                                            rd_.tc_.r_z;
+        target_robot_poses_local_[3].linear() = DyrosMath::rotateWithX(rd_.tc_.r_roll * DEG2RAD) * 
+                                        DyrosMath::rotateWithY(rd_.tc_.r_pitch * DEG2RAD) * 
+                                        DyrosMath::rotateWithZ(rd_.tc_.r_yaw * DEG2RAD);
+        
+        // ================================================================
+
+        // ====================== Initialize target_robot_poses_world_ ======================
+        // left hand
+        target_robot_poses_world_[0].translation() = rd_.link_[Left_Hand].xpos;
+        target_robot_poses_world_[0].linear() = rd_.link_[Left_Hand].rotm;
+
+        // upperbody
+        target_robot_poses_world_[1].translation() = rd_.link_[Upper_Body].xpos;
+        target_robot_poses_world_[1].linear() = rd_.link_[Upper_Body].rotm;
+
+        // head
+        target_robot_poses_world_[2].translation() = rd_.link_[Head].xpos;
+        target_robot_poses_world_[2].linear() = rd_.link_[Head].rotm;
+
+        // right hand
+        target_robot_poses_world_[3].translation() = rd_.link_[Right_Hand].xpos;
+        target_robot_poses_world_[3].linear() = rd_.link_[Right_Hand].rotm;
+        // ==================================================================================
+    }
+
+    // ==================== Desired EE pose ==================== 
+    if(is_world_base_)
+    {
+        // Left Hand
+        rd_.link_[Left_Hand].x_desired = target_robot_poses_world_[0].translation();
+        rd_.link_[Left_Hand].rot_desired = target_robot_poses_world_[0].rotation();
+        
+        // Upper body
+        rd_.link_[Upper_Body].x_desired = target_robot_poses_world_[1].translation();
+        rd_.link_[Upper_Body].rot_desired = target_robot_poses_world_[1].rotation();
+        
+        // Head
+        rd_.link_[Head].x_desired = target_robot_poses_world_[2].translation();
+        rd_.link_[Head].rot_desired = target_robot_poses_world_[2].rotation();
+        
+        // Right Hand
+        rd_.link_[Right_Hand].x_desired = target_robot_poses_world_[3].translation();
+        rd_.link_[Right_Hand].rot_desired = target_robot_poses_world_[3].rotation();
+    }
+    else
+    {
+        // Left Hand
+        rd_.link_[Left_Hand].x_desired = rd_.link_[Left_Hand].x_init + target_robot_poses_local_[0].translation();
+        rd_.link_[Left_Hand].rot_desired = target_robot_poses_local_[0].rotation();
+        
+        // Upper body (only for orientation)
+        rd_.link_[Upper_Body].rot_desired = target_robot_poses_local_[1].rotation();
+        
+        // Head (only for orientation)
+        rd_.link_[Head].rot_desired = target_robot_poses_local_[2].rotation();
+        
+        // Right Hand
+        rd_.link_[Right_Hand].x_desired = rd_.link_[Right_Hand].x_init + target_robot_poses_local_[3].translation();
+        rd_.link_[Right_Hand].rot_desired = target_robot_poses_local_[3].rotation() * DyrosMath::Euler2rot(0, M_PI/2, M_PI).transpose();
+    }
+    // Set trajectory
+    rd_.link_[Left_Hand].SetTrajectoryQuintic(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Left_Hand].x_desired);
+    rd_.link_[Left_Hand].SetTrajectoryRotation(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Left_Hand].rot_desired, false);
+    rd_.link_[Upper_Body].SetTrajectoryQuintic(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Upper_Body].x_desired);
+    rd_.link_[Upper_Body].SetTrajectoryRotation(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Upper_Body].rot_desired, false);
+    rd_.link_[Head].SetTrajectoryQuintic(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Head].x_desired);
+    rd_.link_[Head].SetTrajectoryRotation(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Head].rot_desired, false);
+    rd_.link_[Right_Hand].SetTrajectoryQuintic(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Right_Hand].x_desired);
+    rd_.link_[Right_Hand].SetTrajectoryRotation(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Right_Hand].rot_desired, false);
+    // ========================================================== 
     
     if (rd_.tc_.mode == 6)
     {
-        // initialize tc, executed only once
-        if (rd_.tc_init){
-            std::cout << "mode 6 init!" << std::endl;
-            rd_.tc_init = false;
-            q_init_ = rd_.q_;
-            time_init_ = rd_.control_time_;
-        }
-        resetRobotPose(3.0);
+        rd_.torque_grav = WBC::GravityCompensationTorque(rd_);
+        rd_.torque_desired = kp * (rd_.q_desired - rd_.q_) + kv * (rd_.q_dot_desired - rd_.q_dot_) + rd_.torque_grav;
     }
     else if (rd_.tc_.mode == 7)
     {
-        if (rd_.tc_init) //한번만 실행됩니다(gui)
-        {
-            std::cout << "mode 7 init!" << std::endl;
-            rd_.tc_init = false;
-
-            rd_.link_[Left_Hand].x_desired = rd_.link_[Left_Hand].x_init;
-            rd_.link_[Right_Hand].x_desired = rd_.link_[Right_Hand].x_init;
-            rd_.link_[Upper_Body].x_desired = rd_.link_[Upper_Body].x_init;
-            rd_.link_[Head].x_desired = rd_.link_[Head].x_init;
-
-            rd_.link_[Left_Hand].rot_desired = rd_.link_[Left_Hand].rot_init;
-            rd_.link_[Right_Hand].rot_desired = rd_.link_[Right_Hand].rot_init;
-            rd_.link_[Head].rot_desired = rd_.link_[Head].rot_init;
-
-            rd_.q_desired = rd_.q_;
-            rd_.q_dot_desired = rd_.q_dot_;
-            q_init_ = rd_.q_;
-
-            // ================== tc_. -> target_robot_poses ==================
-            // left hand
-            target_robot_poses[0].translation() << rd_.tc_.l_x, 
-                                                   rd_.tc_.l_y, 
-                                                   rd_.tc_.l_z;
-            target_robot_poses[0].linear() = DyrosMath::rotateWithX(rd_.tc_.l_roll * DEG2RAD) * 
-                                             DyrosMath::rotateWithY(rd_.tc_.l_pitch * DEG2RAD) * 
-                                             DyrosMath::rotateWithZ(rd_.tc_.l_yaw * DEG2RAD);
-
-            // upper body (only for orientation)
-            target_robot_poses[1].translation().setZero();
-            target_robot_poses[1].linear() = DyrosMath::rotateWithX(rd_.tc_.roll * DEG2RAD) * 
-                                             DyrosMath::rotateWithY(rd_.tc_.pitch * DEG2RAD) * 
-                                             DyrosMath::rotateWithZ(rd_.tc_.yaw * DEG2RAD);
-            // head: no input
-
-            // right hand
-            target_robot_poses[3].translation() << rd_.tc_.r_x, 
-                                                   rd_.tc_.r_y, 
-                                                   rd_.tc_.r_z;
-            target_robot_poses[3].linear() = DyrosMath::rotateWithX(rd_.tc_.r_roll * DEG2RAD) * 
-                                             DyrosMath::rotateWithY(rd_.tc_.r_pitch * DEG2RAD) * 
-                                             DyrosMath::rotateWithZ(rd_.tc_.r_yaw * DEG2RAD);
-            // ================================================================
-        }
-        
-        // ==================== Desired EE pose ==================== 
-        // Right Hand
-        rd_.link_[Right_Hand].x_desired = rd_.link_[Right_Hand].x_init + target_robot_poses[3].translation();
-        rd_.link_[Right_Hand].rot_desired = target_robot_poses[3].rotation() * DyrosMath::Euler2rot(0, M_PI/2, M_PI).transpose();
-        rd_.link_[Right_Hand].SetTrajectoryQuintic(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Right_Hand].x_desired);
-        rd_.link_[Right_Hand].SetTrajectoryRotation(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Right_Hand].rot_desired, false);
-        // ========================================================== 
-
         // ==================== CLIK ====================
         // Right Hand
         Eigen::MatrixXd J_rhand = rd_.link_[Right_Hand].Jac();
         Eigen::MatrixXd J_rhand_rarm = J_rhand.block(0, 6+33-8, 6, 8);
-        Eigen::MatrixXd J_rhand_rarm_pinv = J_rhand_rarm.transpose()*DyrosMath::pinv_COD(J_rhand_rarm*J_rhand_rarm.transpose());
+        Eigen::MatrixXd J_rhand_rarm_pinv = J_rhand_rarm.transpose()*DyrosMath::pinv_COD(J_rhand_rarm*J_rhand_rarm.transpose() + 1e-4*Eigen::MatrixXd::Identity(6,6));
 
         Eigen::VectorXd x_error = Eigen::VectorXd::Zero(6);
         x_error.head(3) = rd_.link_[Right_Hand].x_traj - rd_.link_[Right_Hand].xpos;
@@ -140,58 +207,6 @@ void CustomController::computeSlow()
     }
     else if (rd_.tc_.mode == 8)
     {
-        if (rd_.tc_init) //한번만 실행됩니다(gui)
-        {
-            std::cout << "mode 8 init!" << std::endl;
-            rd_.tc_init = false;
-
-            rd_.link_[Left_Hand].x_desired = rd_.link_[Left_Hand].x_init;
-            rd_.link_[Right_Hand].x_desired = rd_.link_[Right_Hand].x_init;
-            rd_.link_[Upper_Body].x_desired = rd_.link_[Upper_Body].x_init;
-            rd_.link_[Head].x_desired = rd_.link_[Head].x_init;
-
-            rd_.link_[Left_Hand].rot_desired = rd_.link_[Left_Hand].rot_init;
-            rd_.link_[Right_Hand].rot_desired = rd_.link_[Right_Hand].rot_init;
-            rd_.link_[Head].rot_desired = rd_.link_[Head].rot_init;
-
-            rd_.q_desired = rd_.q_;
-            rd_.q_dot_desired = rd_.q_dot_;
-            q_init_ = rd_.q_;
-
-            // ================== tc_. -> target_robot_poses ==================
-            // left hand
-            target_robot_poses[0].translation() << rd_.tc_.l_x, 
-                                                   rd_.tc_.l_y, 
-                                                   rd_.tc_.l_z;
-            target_robot_poses[0].linear() = DyrosMath::rotateWithX(rd_.tc_.l_roll * DEG2RAD) * 
-                                             DyrosMath::rotateWithY(rd_.tc_.l_pitch * DEG2RAD) * 
-                                             DyrosMath::rotateWithZ(rd_.tc_.l_yaw * DEG2RAD);
-
-            // upper body (only for orientation)
-            target_robot_poses[1].translation().setZero();
-            target_robot_poses[1].linear() = DyrosMath::rotateWithX(rd_.tc_.roll * DEG2RAD) * 
-                                             DyrosMath::rotateWithY(rd_.tc_.pitch * DEG2RAD) * 
-                                             DyrosMath::rotateWithZ(rd_.tc_.yaw * DEG2RAD);
-            // head: no input
-
-            // right hand
-            target_robot_poses[3].translation() << rd_.tc_.r_x, 
-                                                   rd_.tc_.r_y, 
-                                                   rd_.tc_.r_z;
-            target_robot_poses[3].linear() = DyrosMath::rotateWithX(rd_.tc_.r_roll * DEG2RAD) * 
-                                             DyrosMath::rotateWithY(rd_.tc_.r_pitch * DEG2RAD) * 
-                                             DyrosMath::rotateWithZ(rd_.tc_.r_yaw * DEG2RAD);
-            // ================================================================
-        }
-        
-        // ==================== Desired EE pose ==================== 
-        // Right Hand
-        rd_.link_[Right_Hand].x_desired = rd_.link_[Right_Hand].x_init + target_robot_poses[3].translation();
-        rd_.link_[Right_Hand].rot_desired = target_robot_poses[3].rotation() * DyrosMath::Euler2rot(0, M_PI/2, M_PI).transpose();
-        rd_.link_[Right_Hand].SetTrajectoryQuintic(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Right_Hand].x_desired);
-        rd_.link_[Right_Hand].SetTrajectoryRotation(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Right_Hand].rot_desired, false);
-        // ========================================================== 
-
         // ==================== QP ====================
         // set QP problem
         Eigen::VectorXd x_error = Eigen::VectorXd::Zero(6);
@@ -223,53 +238,6 @@ void CustomController::computeSlow()
     }  
     else if (rd_.tc_.mode == 9)
     {
-        static bool init_qp;
-        if (rd_.tc_init) //한번만 실행됩니다(gui)
-        {
-            init_qp = true;
-
-            std::cout << "mode 9 init!" << std::endl;
-            rd_.tc_init = false;
-
-            rd_.link_[Left_Hand].x_desired = rd_.link_[Left_Hand].x_init;
-            rd_.link_[Right_Hand].x_desired = rd_.link_[Right_Hand].x_init;
-            rd_.link_[Upper_Body].x_desired = rd_.link_[Upper_Body].x_init;
-            rd_.link_[Head].x_desired = rd_.link_[Head].x_init;
-
-            rd_.link_[Left_Hand].rot_desired = rd_.link_[Left_Hand].rot_init;
-            rd_.link_[Right_Hand].rot_desired = rd_.link_[Right_Hand].rot_init;
-            rd_.link_[Head].rot_desired = rd_.link_[Head].rot_init;
-
-            rd_.q_desired = rd_.q_;
-            rd_.q_dot_desired = rd_.q_dot_;
-            q_init_ = rd_.q_;
-
-            // ================== tc_. -> target_robot_poses ==================
-            // left hand
-            target_robot_poses[0].translation() << rd_.tc_.l_x, 
-                                                   rd_.tc_.l_y, 
-                                                   rd_.tc_.l_z;
-            target_robot_poses[0].linear() = DyrosMath::rotateWithX(rd_.tc_.l_roll * DEG2RAD) * 
-                                             DyrosMath::rotateWithY(rd_.tc_.l_pitch * DEG2RAD) * 
-                                             DyrosMath::rotateWithZ(rd_.tc_.l_yaw * DEG2RAD);
-
-            // upper body (only for orientation)
-            target_robot_poses[1].translation().setZero();
-            target_robot_poses[1].linear() = DyrosMath::rotateWithX(rd_.tc_.roll * DEG2RAD) * 
-                                             DyrosMath::rotateWithY(rd_.tc_.pitch * DEG2RAD) * 
-                                             DyrosMath::rotateWithZ(rd_.tc_.yaw * DEG2RAD);
-            // head: no input
-
-            // right hand
-            target_robot_poses[3].translation() << rd_.tc_.r_x, 
-                                                   rd_.tc_.r_y, 
-                                                   rd_.tc_.r_z;
-            target_robot_poses[3].linear() = DyrosMath::rotateWithX(rd_.tc_.r_roll * DEG2RAD) * 
-                                             DyrosMath::rotateWithY(rd_.tc_.r_pitch * DEG2RAD) * 
-                                             DyrosMath::rotateWithZ(rd_.tc_.r_yaw * DEG2RAD);
-            // ================================================================
-        }
-
         // Assume two foot are contact
         WBC::SetContact(rd_, 1, 1);
 
@@ -281,7 +249,6 @@ void CustomController::computeSlow()
             rd_.link_[Right_Hand].SetGain(rd_.tc_.pos_p, rd_.tc_.pos_d, rd_.tc_.acc_p, rd_.tc_.ang_p, rd_.tc_.ang_d, 1);
             rd_.link_[Left_Hand].SetGain(rd_.tc_.pos_p, rd_.tc_.pos_d, rd_.tc_.acc_p, rd_.tc_.ang_p, rd_.tc_.ang_d, 1);
         }
-        
         // ==================== Desired EE pose ==================== 
         // 1. Pelvis
         rd_.link_[Pelvis].x_desired = rd_.tc_.ratio * rd_.link_[Left_Foot].x_init + (1 - rd_.tc_.ratio) * rd_.link_[Right_Foot].x_init;
@@ -289,29 +256,7 @@ void CustomController::computeSlow()
         rd_.link_[Pelvis].rot_desired = DyrosMath::rotateWithY(rd_.tc_.pelv_pitch * DEG2RAD) * DyrosMath::rotateWithZ(rd_.link_[Pelvis].yaw_init);
         rd_.link_[Pelvis].SetTrajectoryQuintic(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Pelvis].xi_init, rd_.link_[Pelvis].x_desired);
         rd_.link_[Pelvis].SetTrajectoryRotation(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time);
-
-        // 2. Right Hand
-        rd_.link_[Right_Hand].x_desired = rd_.link_[Right_Hand].x_init + target_robot_poses[3].translation();
-        rd_.link_[Right_Hand].rot_desired = target_robot_poses[3].rotation() * DyrosMath::Euler2rot(0, M_PI/2, M_PI).transpose();
-        rd_.link_[Right_Hand].SetTrajectoryQuintic(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Right_Hand].x_desired);
-        rd_.link_[Right_Hand].SetTrajectoryRotation(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Right_Hand].rot_desired, false);
-
-        // 3. Left Hand
-        rd_.link_[Left_Hand].x_desired = rd_.link_[Left_Hand].x_init + target_robot_poses[0].translation();
-        rd_.link_[Left_Hand].rot_desired = target_robot_poses[0].rotation() * DyrosMath::Euler2rot(0, M_PI/2, M_PI).transpose();
-        rd_.link_[Left_Hand].SetTrajectoryQuintic(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Left_Hand].x_desired);
-        rd_.link_[Left_Hand].SetTrajectoryRotation(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time, rd_.link_[Left_Hand].rot_desired, false);
-
-        // 4. Upper body
-        rd_.link_[Upper_Body].rot_desired = target_robot_poses[1].rotation();
-        rd_.link_[Upper_Body].SetTrajectoryRotation(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time);
-
-        // 5. head
-        rd_.link_[Head].rot_desired = target_robot_poses[2].rotation();
-        rd_.link_[Head].SetTrajectoryRotation(rd_.control_time_, rd_.tc_time_, rd_.tc_time_ + rd_.tc_.time);
         // ========================================================== 
-
-
 
         // ==================== HQP ====================
         rd_.torque_grav = WBC::GravityCompensationTorque(rd_);
@@ -326,7 +271,7 @@ void CustomController::computeSlow()
         WBC::CalcJKT(rd_, ts1);
         WBC::CalcTaskNull(rd_, ts1);
         static CQuadraticProgram task_qp1;
-        if(WBC::TaskControlHQP(rd_, ts1, task_qp1, torque_Task, MatrixXd::Identity(MODEL_DOF, MODEL_DOF), init_qp))
+        if(WBC::TaskControlHQP(rd_, ts1, task_qp1, torque_Task, MatrixXd::Identity(MODEL_DOF, MODEL_DOF), is_qp_first_))
         {
             torque_Task = ts1.torque_h_ + rd_.torque_grav;
 
@@ -339,7 +284,7 @@ void CustomController::computeSlow()
             WBC::CalcJKT(rd_, ts2);
             WBC::CalcTaskNull(rd_, ts2);
             static CQuadraticProgram task_qp2;
-            if(WBC::TaskControlHQP(rd_, ts2, task_qp2, torque_Task, ts1.Null_task, init_qp))
+            if(WBC::TaskControlHQP(rd_, ts2, task_qp2, torque_Task, ts1.Null_task, is_qp_first_))
             {
                 torque_Task = ts1.torque_h_ + 
                             ts1.Null_task * ts2.torque_h_ + 
@@ -354,7 +299,7 @@ void CustomController::computeSlow()
                 WBC::CalcJKT(rd_, ts3);
                 WBC::CalcTaskNull(rd_, ts3);
                 static CQuadraticProgram task_qp3;
-                if(WBC::TaskControlHQP(rd_, ts3, task_qp3, torque_Task, ts1.Null_task * ts2.Null_task, init_qp))
+                if(WBC::TaskControlHQP(rd_, ts3, task_qp3, torque_Task, ts1.Null_task * ts2.Null_task, is_qp_first_))
                 {
                     torque_Task = ts1.torque_h_ + 
                                 ts1.Null_task * ts2.torque_h_ + 
@@ -370,7 +315,7 @@ void CustomController::computeSlow()
                     WBC::CalcJKT(rd_, ts4);
                     WBC::CalcTaskNull(rd_, ts4);
                     static CQuadraticProgram task_qp4;
-                    if(WBC::TaskControlHQP(rd_, ts4, task_qp4, torque_Task, ts1.Null_task * ts2.Null_task * ts3.Null_task, init_qp))
+                    if(WBC::TaskControlHQP(rd_, ts4, task_qp4, torque_Task, ts1.Null_task * ts2.Null_task * ts3.Null_task, is_qp_first_))
                     {
                         torque_Task = ts1.torque_h_ + 
                                       ts1.Null_task * ts2.torque_h_ + 
@@ -386,7 +331,7 @@ void CustomController::computeSlow()
                         ts5.Update(Jtask5, fstar5);
                         WBC::CalcJKT(rd_, ts5);
                         static CQuadraticProgram task_qp5;
-                        if(WBC::TaskControlHQP(rd_, ts5, task_qp5, torque_Task, ts1.Null_task * ts2.Null_task * ts3.Null_task * ts4.Null_task, init_qp))
+                        if(WBC::TaskControlHQP(rd_, ts5, task_qp5, torque_Task, ts1.Null_task * ts2.Null_task * ts3.Null_task * ts4.Null_task, is_qp_first_))
                         {
                             torque_Task = ts1.torque_h_ + 
                                           ts1.Null_task * ts2.torque_h_ + 
@@ -402,8 +347,7 @@ void CustomController::computeSlow()
             }
 
         }
-
-
+        if(is_qp_first_) is_qp_first_ = false;
         // =============================================
         
         // holding torque command (except upper body)
@@ -567,56 +511,85 @@ void CustomController::computeFast()
 
 void CustomController::TargetPosesCallback(const geometry_msgs::PoseArrayPtr &msg)
 {
+    std::vector<Eigen::Affine3d> temp_target_poses;
+    temp_target_poses.resize(4);
+
     // left hand
-    target_robot_poses[0].translation() << msg->poses[0].position.x,
-                                           msg->poses[0].position.y,
-                                           msg->poses[0].position.z;
+    temp_target_poses[0].translation() << msg->poses[0].position.x,
+                                          msg->poses[0].position.y,
+                                          msg->poses[0].position.z;
     Eigen::Quaterniond target_quat_lhand(msg->poses[0].orientation.w,
                                          msg->poses[0].orientation.x,
                                          msg->poses[0].orientation.y,
                                          msg->poses[0].orientation.z);
-    target_robot_poses[0].linear() = target_quat_lhand.toRotationMatrix();
+    temp_target_poses[0].linear() = target_quat_lhand.toRotationMatrix();
 
-    // upper body (only orientation)
-    target_robot_poses[1].translation().setZero();
+    // upper body
+    temp_target_poses[1].translation() << msg->poses[1].position.x,
+                                          msg->poses[1].position.y,
+                                          msg->poses[1].position.z;
     Eigen::Quaterniond target_quat_upper(msg->poses[1].orientation.w,
-                                         msg->poses[1].orientation.x,
-                                         msg->poses[1].orientation.y,
-                                         msg->poses[1].orientation.z);
-    target_robot_poses[1].linear() = target_quat_upper.toRotationMatrix();
+                                        msg->poses[1].orientation.x,
+                                        msg->poses[1].orientation.y,
+                                        msg->poses[1].orientation.z);
+    temp_target_poses[1].linear() = target_quat_upper.toRotationMatrix();
 
-    // head (only orientation)
-    target_robot_poses[2].translation().setZero();
+    // head
+    temp_target_poses[2].translation() << msg->poses[2].position.x,
+                                          msg->poses[2].position.y,
+                                          msg->poses[2].position.z;
     Eigen::Quaterniond target_quat_head(msg->poses[2].orientation.w,
                                         msg->poses[2].orientation.x,
                                         msg->poses[2].orientation.y,
                                         msg->poses[2].orientation.z);
-    target_robot_poses[2].linear() = target_quat_head.toRotationMatrix();
+    temp_target_poses[2].linear() = target_quat_head.toRotationMatrix();
 
     // right hand
-    target_robot_poses[3].translation() << msg->poses[3].position.x,
-                                           msg->poses[3].position.y,
-                                           msg->poses[3].position.z;
+    temp_target_poses[3].translation() << msg->poses[3].position.x,
+                                        msg->poses[3].position.y,
+                                        msg->poses[3].position.z;
     Eigen::Quaterniond target_quat_rhand(msg->poses[3].orientation.w,
-                                         msg->poses[3].orientation.x,
-                                         msg->poses[3].orientation.y,
-                                         msg->poses[3].orientation.z);
-    target_robot_poses[3].linear() = target_quat_rhand.toRotationMatrix();
+                                        msg->poses[3].orientation.x,
+                                        msg->poses[3].orientation.y,
+                                        msg->poses[3].orientation.z);
+    temp_target_poses[3].linear() = target_quat_rhand.toRotationMatrix();
+
+    if(is_world_base_) target_robot_poses_world_ = temp_target_poses;
+    else  target_robot_poses_local_ = temp_target_poses;
 }
 
 void CustomController::TargetRHandPoseCallback(const geometry_msgs::PoseStampedPtr &msg)
 {
     // right hand
-    target_robot_poses[3].translation() << msg->pose.position.x,
-                                           msg->pose.position.y,
-                                           msg->pose.position.z;
+    Eigen::Affine3d temp_target_rhand_pose;
+    temp_target_rhand_pose.translation() << msg->pose.position.x,
+                                            msg->pose.position.y,
+                                            msg->pose.position.z;
     Eigen::Quaterniond target_quat_rhand(msg->pose.orientation.w,
                                          msg->pose.orientation.x,
                                          msg->pose.orientation.y,
                                          msg->pose.orientation.z);
-    target_robot_poses[3].linear() = target_quat_rhand.toRotationMatrix();
+    temp_target_rhand_pose.linear() = target_quat_rhand.toRotationMatrix();
+
+    if(is_world_base_) target_robot_poses_world_[3] = temp_target_rhand_pose;
+    else  target_robot_poses_local_[3] = temp_target_rhand_pose;
 }
 
+void CustomController::TargetJointCallback(const sensor_msgs::JointStatePtr &msg)
+{
+    if(rd_.tc_.mode == 6)
+    {
+        for(size_t i = 0; i < msg->name.size(); i++)
+        {                    
+            rd_.q_desired(JOINT_INDEX[ msg->name[i]]) = msg->position[i];
+            rd_.q_dot_desired(JOINT_INDEX[ msg->name[i]]) = msg->velocity[i];
+        }
+    }
+    else
+    {
+        ROS_ERROR("Mode is not 6");
+    }
+}
 
 void CustomController::computePlanner()
 {

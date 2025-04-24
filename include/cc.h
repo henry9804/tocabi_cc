@@ -35,6 +35,7 @@ public:
     void resetRobotPose(double duration);
 
     void TargetPosesCallback(const geometry_msgs::PoseArrayPtr &msg);
+    void TargetJointCallback(const sensor_msgs::JointStatePtr &msg);
     void TargetRHandPoseCallback(const geometry_msgs::PoseStampedPtr &msg);
 
     RobotData &rd_;
@@ -54,6 +55,9 @@ public:
     ros::Subscriber target_pose_sub_; // left hand, upper body, head, right hand
     ros::Subscriber target_rhand_pose_sub_; // only for right hand
 
+    ros::Subscriber joint_target_sub_;
+    ros::Subscriber pose_target_sub_;
+
     //////////jh OSF & QP controller performance checking data////////
     ros::Publisher desired_robot_pose_pub_; // left hand, head, right hand
     geometry_msgs::PoseArray desired_robot_pose_msg_; // left hand, head, right hand
@@ -64,11 +68,16 @@ public:
     Eigen::Matrix<double, MODEL_DOF, MODEL_DOF> kp;
     Eigen::Matrix<double, MODEL_DOF, MODEL_DOF> kv;
 
-    std::vector<Eigen::Affine3d> target_robot_poses; // left hand, upper body, head, right hand
+    std::vector<Eigen::Affine3d> target_robot_poses_local_; // left hand, upper body, head, right hand
+    std::vector<Eigen::Affine3d> target_robot_poses_world_; // left hand, upper body, head, right hand
 
     std::unique_ptr<QP::CartesianVelocity> qp_cartesian_velocity_;
+
+    bool is_world_base_{false};
+    bool is_qp_first_{true};
 
 private:
     Eigen::VectorQd ControlVal_;
     const double hz_ = 2000.0;
+    map<std::string, int> JOINT_INDEX;
 };
