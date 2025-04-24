@@ -13,19 +13,20 @@ namespace QP
     class CartesianVelocity : public CQuadraticProgram
     {
         public:
+            EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+
             CartesianVelocity();
-            ~CartesianVelocity() {};
+            ~CartesianVelocity() override = default;
             void setCurrentState(const Eigen::Matrix<double, JOINT_DOF, 1> &q_current, const Eigen::Matrix<double, JOINT_DOF, 1> &qdot_current, const Eigen::Matrix<double, TASK_DOF, JOINT_DOF> &j_current);
             void setDesiredEEVel(const Eigen::Matrix<double, TASK_DOF, 1> &xdot_desired);
             bool getOptJointVel(Eigen::Matrix<double, JOINT_DOF, 1> &opt_qdot);
             ros::NodeHandle nh_qp_;
 
         private:
-            const static int nq_ = JOINT_DOF;
-            const static int ns_ = TASK_DOF; 
-
-            static constexpr int nx_ = ns_ + nq_;   // number of decision variables
-            static constexpr int nc_ = ns_ + nq_*3; // number of constraints
+            static constexpr int nq_ = JOINT_DOF;
+            static constexpr int ns_ = TASK_DOF;
+            static constexpr int nx_ = ns_ + nq_;       // decision variables
+            static constexpr int nc_ = ns_ + nq_ * 3;   // constraints
 
             struct QPIndex
             {
