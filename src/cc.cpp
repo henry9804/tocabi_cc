@@ -72,6 +72,8 @@ void CustomController::computeSlow()
         std::cout << "mode" << rd_.tc_.mode << " init!" << std::endl;
         rd_.tc_init = false;
 
+        time_init_ = rd_.control_time_;
+
         rd_.link_[Left_Hand].x_desired = rd_.link_[Left_Hand].x_init;
         rd_.link_[Right_Hand].x_desired = rd_.link_[Right_Hand].x_init;
         rd_.link_[Upper_Body].x_desired = rd_.link_[Upper_Body].x_init;
@@ -84,6 +86,7 @@ void CustomController::computeSlow()
         rd_.q_desired = rd_.q_;
         rd_.q_dot_desired = rd_.q_dot_;
         q_init_ = rd_.q_;
+        qdot_init_ = rd_.q_dot_;
         q_desired_ = rd_.q_;
         q_dot_desired_ = rd_.q_dot_;
 
@@ -182,9 +185,25 @@ void CustomController::computeSlow()
     {
         if(is_q_target_)
         {
-            rd_.q_desired = q_desired_;
-            rd_.q_dot_desired = q_dot_desired_;
+            time_init_ = rd_.control_time_;
             is_q_target_ = false;
+            q_init_ = rd_.q_;
+            qdot_init_ = rd_.q_dot_;
+        }
+
+        double duration = 0.1;
+        
+        for (int i = 0; i < 12; i++)
+        {
+            rd_.q_desired[i]     = q_desired_[i]; 
+            rd_.q_dot_desired[i] = 0.0; 
+        }
+
+        for (int i = 12; i < MODEL_DOF; i++){
+            // rd_.q_desired[i] =  DyrosMath::cubic(rd_.control_time_, time_init_, time_init_+duration, q_init_[i], q_desired_[i], qdot_init_[i], 0.0);
+            // rd_.q_dot_desired[i] =  DyrosMath::cubicDot(rd_.control_time_, time_init_, time_init_+duration, q_init_[i], q_desired_[i], qdot_init_[i], 0.0);
+            rd_.q_desired[i] = q_desired_[i];
+            rd_.q_dot_desired[i] = 0.0;
         }
         
         rd_.torque_grav = WBC::GravityCompensationTorque(rd_);
@@ -227,7 +246,7 @@ void CustomController::computeSlow()
         Eigen::VectorXd gain_diag = Eigen::VectorXd::Zero(6);
         gain_diag << 10, 10, 10, 5, 5, 5;
 
-        qp_cartesian_velocity_->setCurrentState(rd_.q_.tail(8), rd_.q_dot_.tail(8), rd_.link_[Right_Hand].Jac().block(0, 31, 6, 8));
+        qp_cartesian_velocity_->setCurrentState(rd_.q_.tail(8), rd_.q_dot_desired.tail(8), rd_.link_[Right_Hand].Jac().block(0, 31, 6, 8));
         qp_cartesian_velocity_->setDesiredEEVel(gain_diag.asDiagonal()*x_error);
 
         // solve QP
@@ -241,6 +260,10 @@ void CustomController::computeSlow()
         rd_.q_dot_desired.tail(8) = opt_qdot;        
         
         rd_.q_desired += rd_.q_dot_desired / hz_;
+        if(rd_.control_time_ - time_init_ < 2.0)
+        {
+            rd_.q_desired = DyrosMath::cubicVector<MODEL_DOF>(rd_.control_time_, time_init_, time_init_ + 2.0, q_init_, rd_.q_desired, Eigen::VectorQd::Zero(), Eigen::VectorQd::Zero());
+        }
         // ============================================
 
         // torque PD control
