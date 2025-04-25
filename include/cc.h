@@ -76,6 +76,11 @@ public:
     bool is_world_base_{false};
     bool is_qp_first_{true};
 
+    Eigen::VectorQd q_desired_, q_dot_desired_;
+    std::vector<double> target_q_, target_q_dot_;
+    std::vector<std::string> target_names_;
+    bool is_q_target_{false};
+
 private:
     Eigen::VectorQd ControlVal_;
     const double hz_ = 2000.0;

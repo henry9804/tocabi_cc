@@ -52,6 +52,8 @@ CustomController::CustomController(RobotData &rd) : rd_(rd)
     for(int i = 0; i < MODEL_DOF; i++)
     {
         JOINT_INDEX.insert({JOINT_NAME[i], i});
+        std::cout << "joint " << i << ": " << JOINT_NAME[i] <<std::endl;
+
     }
 
 }
@@ -82,6 +84,8 @@ void CustomController::computeSlow()
         rd_.q_desired = rd_.q_;
         rd_.q_dot_desired = rd_.q_dot_;
         q_init_ = rd_.q_;
+        q_desired_ = rd_.q_;
+        q_dot_desired_ = rd_.q_dot_;
 
         // ================== tc_. -> target_robot_poses_local_ ==================
         // left hand
@@ -176,6 +180,23 @@ void CustomController::computeSlow()
     
     if (rd_.tc_.mode == 6)
     {
+        if(is_q_target_)
+        {
+            for(size_t i = 0; i < target_names_.size(); i++)
+            {                    
+                // std::cout << "msg_name: " << msg->name[i] <<  " / index:  " << JOINT_INDEX[msg->name[i]] << std::endl;
+                // std::cout << rd_.q_desired(0) << std::endl;
+                // rd_.q_desired(JOINT_INDEX[msg->name[i]]) = msg->position[i];
+                // rd_.q_dot_desired(JOINT_INDEX[msg->name[i]]) = msg->velocity[i];
+                q_desired_(JOINT_INDEX[target_names_[i]]) = target_q_[i];
+                q_dot_desired_(JOINT_INDEX[target_names_[i]]) = target_q_dot_[i];
+            }
+            is_q_target_ = false;
+       
+        }
+        
+        rd_.q_desired = q_desired_;
+        rd_.q_dot_desired = q_dot_desired_;
         rd_.torque_grav = WBC::GravityCompensationTorque(rd_);
         rd_.torque_desired = kp * (rd_.q_desired - rd_.q_) + kv * (rd_.q_dot_desired - rd_.q_dot_) + rd_.torque_grav;
     }
@@ -579,11 +600,19 @@ void CustomController::TargetJointCallback(const sensor_msgs::JointStatePtr &msg
 {
     if(rd_.tc_.mode == 6)
     {
-        for(size_t i = 0; i < msg->name.size(); i++)
-        {                    
-            rd_.q_desired(JOINT_INDEX[ msg->name[i]]) = msg->position[i];
-            rd_.q_dot_desired(JOINT_INDEX[ msg->name[i]]) = msg->velocity[i];
-        }
+        // for(size_t i = 0; i < msg->name.size(); i++)
+        // {                    
+        //     // std::cout << "msg_name: " << msg->name[i] <<  " / index:  " << JOINT_INDEX[msg->name[i]] << std::endl;
+        //     // std::cout << rd_.q_desired(0) << std::endl;
+        //     // rd_.q_desired(JOINT_INDEX[msg->name[i]]) = msg->position[i];
+        //     // rd_.q_dot_desired(JOINT_INDEX[msg->name[i]]) = msg->velocity[i];
+        //     q_desired_(JOINT_INDEX[msg->name[i]]) = msg->position[i];
+        //     q_dot_desired_(JOINT_INDEX[msg->name[i]]) = msg->velocity[i];
+        // }
+        target_q_ = msg->position;
+        target_q_dot_ = msg->velocity;
+        target_names_ = msg->name;
+        is_q_target_ = true;
     }
     else
     {
