@@ -187,23 +187,15 @@ void CustomController::computeSlow()
         {
             time_init_ = rd_.control_time_;
             is_q_target_ = false;
-            q_init_ = rd_.q_;
-            qdot_init_ = rd_.q_dot_;
+            q_init_ = rd_.q_desired;
+            qdot_init_ = rd_.q_dot_desired;
         }
 
         double duration = 0.1;
         
-        for (int i = 0; i < 12; i++)
-        {
-            rd_.q_desired[i]     = q_desired_[i]; 
-            rd_.q_dot_desired[i] = 0.0; 
-        }
-
-        for (int i = 12; i < MODEL_DOF; i++){
-            // rd_.q_desired[i] =  DyrosMath::cubic(rd_.control_time_, time_init_, time_init_+duration, q_init_[i], q_desired_[i], qdot_init_[i], 0.0);
-            // rd_.q_dot_desired[i] =  DyrosMath::cubicDot(rd_.control_time_, time_init_, time_init_+duration, q_init_[i], q_desired_[i], qdot_init_[i], 0.0);
-            rd_.q_desired[i] = q_desired_[i];
-            rd_.q_dot_desired[i] = 0.0;
+        for (int i = 0; i < MODEL_DOF; i++){
+            rd_.q_desired[i] =  DyrosMath::cubic(rd_.control_time_, time_init_, time_init_+duration, q_init_[i], q_desired_[i], qdot_init_[i], q_dot_desired_[i]);
+            rd_.q_dot_desired[i] =  DyrosMath::cubicDot(rd_.control_time_, time_init_, time_init_+duration, q_init_[i], q_desired_[i], qdot_init_[i], q_dot_desired_[i]);
         }
         
         rd_.torque_grav = WBC::GravityCompensationTorque(rd_);
@@ -614,128 +606,64 @@ void CustomController::TargetJointCallback(const sensor_msgs::JointStatePtr &msg
     if(rd_.tc_.mode == 6)
     {
         if (msg->name.size() != msg->position.size())
-    {
-        ROS_ERROR_STREAM("[TJC] name(" << msg->name.size()
-                         << ") ≠ position(" << msg->position.size() << ") - drop");
-        return;                 // 필수 조건 위배 : 즉시 반환
-    }
-
-    const bool has_velocity =
-        (msg->velocity.size() == 0) ||
-        (msg->velocity.size() == msg->name.size());
-
-    if (!has_velocity)          // velocity 배열이 있는데 길이가 다르면 경고
-    {
-        ROS_WARN_STREAM("[TJC] velocity length("
-                        << msg->velocity.size()
-                        << ") ≠ name/position (" << msg->name.size()
-                        << ")  →  모든 속도 = 0 처리");
-    }
-
-    /* ───── 2. q_desired_/q_dot_desired_ 크기 보장 ──────────────── */
-    if (q_desired_.size()     != MODEL_DOF) q_desired_.setZero(MODEL_DOF);
-    if (q_dot_desired_.size() != MODEL_DOF) q_dot_desired_.setZero(MODEL_DOF);
-
-    /* ───── 3. 각 관절 갱신 ─────────────────────────────────────── */
-    for (size_t i = 0; i < msg->name.size(); ++i)
-    {
-        const std::string& jname = msg->name[i];
-        auto it = JOINT_INDEX.find(jname);
-        if (it == JOINT_INDEX.end())
         {
-            ROS_WARN_STREAM("[TJC] unknown joint \"" << jname << "\" (skip)");
-            continue;
-        }
-        const int idx = it->second;
-        if (idx < 0 || idx >= MODEL_DOF)
-        {
-            ROS_ERROR_STREAM("[TJC] index out of range for \"" << jname
-                             << "\" idx=" << idx);
-            continue;
+            ROS_ERROR_STREAM("[TJC] name(" << msg->name.size()
+                            << ") ≠ position(" << msg->position.size() << ") - drop");
+            return;                 // 필수 조건 위배 : 즉시 반환
         }
 
-        /* position 은 반드시 존재 */
-        q_desired_[idx] = msg->position[i];
+        const bool has_velocity = (msg->velocity.size() == msg->name.size());
 
-        /* velocity 는 선택 사항 */
-        double vel = 0.0;
-        if (msg->velocity.size() == msg->name.size())
-            vel = msg->velocity[i];
-        q_dot_desired_[idx] = vel;
-
-        ROS_DEBUG_STREAM("[TJC] " << jname
-                         << "  idx=" << idx
-                         << "  pos=" << std::fixed << std::setprecision(4)
-                         << msg->position[i]
-                         << "  vel=" << vel);
-    }
-
-    /* ───── 4. 완료 로그 & 플래그 ──────────────────────────────── */
-    is_q_target_ = true;
-    ROS_INFO_STREAM("[TJC] processed "
-                    << msg->name.size() << " joints  "
-                    << "(velocities " << (msg->velocity.size()==0 ? "absent" : "used") << ")");if (msg->name.size() != msg->position.size())
-    {
-        ROS_ERROR_STREAM("[TJC] name(" << msg->name.size()
-                         << ") ≠ position(" << msg->position.size() << ") - drop");
-        return;                 // 필수 조건 위배 : 즉시 반환
-    }
-
-    // const bool has_velocity =
-    //     (msg->velocity.size() == 0) ||
-    //     (msg->velocity.size() == msg->name.size());
-
-    if (!has_velocity)          // velocity 배열이 있는데 길이가 다르면 경고
-    {
-        ROS_WARN_STREAM("[TJC] velocity length("
-                        << msg->velocity.size()
-                        << ") ≠ name/position (" << msg->name.size()
-                        << ")  →  모든 속도 = 0 처리");
-    }
-
-    /* ───── 2. q_desired_/q_dot_desired_ 크기 보장 ──────────────── */
-    if (q_desired_.size()     != MODEL_DOF) q_desired_.setZero(MODEL_DOF);
-    if (q_dot_desired_.size() != MODEL_DOF) q_dot_desired_.setZero(MODEL_DOF);
-
-    /* ───── 3. 각 관절 갱신 ─────────────────────────────────────── */
-    for (size_t i = 0; i < msg->name.size(); ++i)
-    {
-        const std::string& jname = msg->name[i];
-        auto it = JOINT_INDEX.find(jname);
-        if (it == JOINT_INDEX.end())
+        if (!has_velocity)          // velocity 배열이 있는데 길이가 다르면 경고
         {
-            ROS_WARN_STREAM("[TJC] unknown joint \"" << jname << "\" (skip)");
-            continue;
-        }
-        const int idx = it->second;
-        if (idx < 0 || idx >= MODEL_DOF)
-        {
-            ROS_ERROR_STREAM("[TJC] index out of range for \"" << jname
-                             << "\" idx=" << idx);
-            continue;
+            ROS_WARN_STREAM("[TJC] velocity length("
+                            << msg->velocity.size()
+                            << ") ≠ name/position (" << msg->name.size()
+                            << ")  →  모든 속도 = 0 처리");
         }
 
-        /* position 은 반드시 존재 */
-        q_desired_[idx] = msg->position[i];
+        /* ───── 2. q_desired_/q_dot_desired_ 크기 보장 ──────────────── */
+        if (q_desired_.size()     != MODEL_DOF) q_desired_.setZero(MODEL_DOF);
+        if (q_dot_desired_.size() != MODEL_DOF) q_dot_desired_.setZero(MODEL_DOF);
 
-        /* velocity 는 선택 사항 */
-        double vel = 0.0;
-        if (msg->velocity.size() == msg->name.size())
-            vel = msg->velocity[i];
-        q_dot_desired_[idx] = vel;
+        /* ───── 3. 각 관절 갱신 ─────────────────────────────────────── */
+        for (size_t i = 0; i < msg->name.size(); ++i)
+        {
+            const std::string& jname = msg->name[i];
+            auto it = JOINT_INDEX.find(jname);
+            if (it == JOINT_INDEX.end())
+            {
+                ROS_WARN_STREAM("[TJC] unknown joint \"" << jname << "\" (skip)");
+                continue;
+            }
+            const int idx = it->second;
+            if (idx < 0 || idx >= MODEL_DOF)
+            {
+                ROS_ERROR_STREAM("[TJC] index out of range for \"" << jname
+                                << "\" idx=" << idx);
+                continue;
+            }
 
-        ROS_DEBUG_STREAM("[TJC] " << jname
-                         << "  idx=" << idx
-                         << "  pos=" << std::fixed << std::setprecision(4)
-                         << msg->position[i]
-                         << "  vel=" << vel);
-    }
+            /* position 은 반드시 존재 */
+            q_desired_[idx] = msg->position[i];
 
-    /* ───── 4. 완료 로그 & 플래그 ──────────────────────────────── */
-    is_q_target_ = true;
-    ROS_INFO_STREAM("[TJC] processed "
-                    << msg->name.size() << " joints  "
-                    << "(velocities " << (msg->velocity.size()==0 ? "absent" : "used") << ")");
+            /* velocity 는 선택 사항 */
+            double vel = 0.0;
+            if (has_velocity) vel = msg->velocity[i];
+            q_dot_desired_[idx] = vel;
+
+            ROS_DEBUG_STREAM("[TJC] " << jname
+                            << "  idx=" << idx
+                            << "  pos=" << std::fixed << std::setprecision(4)
+                            << msg->position[i]
+                            << "  vel=" << vel);
+        }
+
+        /* ───── 4. 완료 로그 & 플래그 ──────────────────────────────── */
+        is_q_target_ = true;
+        ROS_INFO_STREAM("[TJC] processed "
+                        << msg->name.size() << " joints  "
+                        << "(velocities " << (msg->velocity.size()==0 ? "absent" : "used") << ")");
     }
     else
     {
