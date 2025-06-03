@@ -236,7 +236,7 @@ void CustomController::computeSlow()
         x_error.tail(3) = DyrosMath::getPhi(rd_.link_[Right_Hand].r_traj, rd_.link_[Right_Hand].rotm);
 
         Eigen::VectorXd gain_diag = Eigen::VectorXd::Zero(6);
-        gain_diag << 10, 10, 10, 5, 5, 5;
+        gain_diag << 5, 5, 5, 5, 5, 5;
 
         qp_cartesian_velocity_->setCurrentState(rd_.q_.tail(8), rd_.q_dot_desired.tail(8), rd_.link_[Right_Hand].Jac().block(0, 31, 6, 8));
         qp_cartesian_velocity_->setDesiredEEVel(gain_diag.asDiagonal()*x_error);
@@ -259,7 +259,9 @@ void CustomController::computeSlow()
         // ============================================
 
         // torque PD control
-        rd_.torque_grav = WBC::GravityCompensationTorque(rd_);
+        WBC::SetContact(rd_, 1, 1); 
+        rd_.torque_grav = WBC::ContactForceRedistributionTorque(rd_, WBC::GravityCompensationTorque(rd_));
+        // rd_.torque_grav = WBC::GravityCompensationTorque(rd_);
         rd_.torque_desired = kp * (rd_.q_desired - rd_.q_) + kv * (rd_.q_dot_desired - rd_.q_dot_) + rd_.torque_grav;
     }  
     else if (rd_.tc_.mode == 9)
