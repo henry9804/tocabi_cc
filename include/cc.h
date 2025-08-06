@@ -47,6 +47,8 @@ public:
     void JointTrajectoryCallback(const trajectory_msgs::JointTrajectoryPtr &msg);
     void JointTargetCallback(const sensor_msgs::JointStatePtr &msg);
     void PoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg);
+    void TerminateCallback(const std_msgs::BoolPtr &msg);
+    void HandMsgCallback(const std_msgs::Int32Ptr &msg);
     Eigen::Matrix3d Quat2rotmatrix(double q0, double q1, double q2, double q3);
     float PositionMapping( float haptic_pos, int i);
     bool saveImage(const sensor_msgs::ImageConstPtr &image_msg);
@@ -78,20 +80,27 @@ public:
     int traj_index = 0;
     int num_waypoint = 0;
 
-    bool target_received = false;
+    bool joint_target_received = false;
+    bool pose_target_received = false;
     double t_0_;
     std::vector<std::string> joint_names_;
-    std::vector<double> joint_target_;
+    Eigen::VectorQd joint_target_;
     Eigen::VectorQd q_0_;
     Eigen::VectorQd qdot_0_;
     ros::Publisher terminate_pub;
+    ros::Subscriber terminate_sub;
     std_msgs::Bool terminate_msg;
     ros::Publisher hand_open_pub;
+    ros::Subscriber hand_open_sub;
     std_msgs::Int32 hand_open_msg;
 
     void publishRobotPoses();
     ros::Publisher robot_pose_pub;
+    ros::Publisher desired_robot_pose_pub_;
+    ros::Publisher robot_joint_pub_;
+    ros::Publisher desired_joint_pub_;
     geometry_msgs::PoseArray robot_pose_msg;
+    geometry_msgs::PoseArray desired_robot_pose_msg_;
 
     void resetRobotPose(double duration);
     bool target_reached_ = false;
@@ -122,7 +131,9 @@ public:
     bool terminate = false;
 
     float distance_hand2obj;
-    int prev_mode = 8;
+    int prev_mode = 9;
+    int num_data = 0;
+    int num_test = 0;
 
     Eigen::Matrix<double, MODEL_DOF, MODEL_DOF> kp;
     Eigen::Matrix<double, MODEL_DOF, MODEL_DOF> kv;
