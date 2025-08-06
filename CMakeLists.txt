@@ -15,7 +15,6 @@ std_msgs
 )
 
 find_package(OpenCV REQUIRED)
-find_package(OsqpEigen REQUIRED)
 
 catkin_package(
   INCLUDE_DIRS include
@@ -37,7 +36,7 @@ include_directories(
 add_library(${PROJECT_NAME}
   src/cc.cpp
   src/QP_base.cpp
-  src/QP_cartesian_velocity.cpp
+  src/QP_cartesian_velocity_wb.cpp
 )
 add_dependencies(${PROJECT_NAME} ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
@@ -45,7 +44,6 @@ add_dependencies(${PROJECT_NAME} ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EX
 target_link_libraries(${PROJECT_NAME}
   ${catkin_LIBRARIES}
   ${OpenCV_LIBRARIES}
-  OsqpEigen::OsqpEigen
 )
 
 install(TARGETS ${PROJECT_NAME}

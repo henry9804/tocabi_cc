@@ -1,24 +1,24 @@
-#ifndef QP_CARTESIAN_VELOCITY_H
-#define QP_CARTESIAN_VELOCITY_H
+#ifndef QP_CARTESIAN_VELOCITY_WB_H
+#define QP_CARTESIAN_VELOCITY_WB_H
 
 #include "ros/ros.h"
 #include "qp.h"
 #include "math_type_define.h"
 
-#define JOINT_DOF 8 // 8 for TOCABI arm
-#define TASK_DOF 6  // 6 for end-effector JOINT_dofS
+#define JOINT_DOF 21 // 3 for waist, 8 for larm, 2 for neck, 8 for rarm
+#define TASK_DOF 18  // 6 for each end-effector (lhand, head, rhand)
 
 namespace QP
 {
-    class CartesianVelocity : public CQuadraticProgram
+    class CartesianVelocityWB : public CQuadraticProgram
     {
         public:
             EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-            CartesianVelocity();
-            ~CartesianVelocity() override = default;
+            CartesianVelocityWB();
+            ~CartesianVelocityWB() override = default;
             void setCurrentState(const Eigen::Matrix<double, JOINT_DOF, 1> &q_current, const Eigen::Matrix<double, JOINT_DOF, 1> &qdot_current, const Eigen::Matrix<double, TASK_DOF, JOINT_DOF> &j_current);
-            void setDesiredEEVel(const Eigen::Matrix<double, TASK_DOF, 1> &xdot_desired);
+            void setDesiredEEVel(const Eigen::Matrix<double, 6, 1> &lhand_dot_desired, const Eigen::Matrix<double, 6, 1> &head_dot_desired, const Eigen::Matrix<double, 6, 1> &rhand_dot_desired);
             bool getOptJointVel(Eigen::Matrix<double, JOINT_DOF, 1> &opt_qdot);
             ros::NodeHandle nh_qp_;
 
@@ -30,26 +30,14 @@ namespace QP
 
             struct QPIndex
             {
-                int s1 = 0; // slack 1
-                int s2 = 1; // slack 2
-                int s3 = 2; // slack 3
-                int s4 = 3; // slack 4
-                int s5 = 4; // slack 5
-                int s6 = 5; // slack 6
+                int s = 0;  // slack start index
 
-                int dq1 = 6;  // qdot 1 
-                int dq2 = 7;  // qdot 2 
-                int dq3 = 8;  // qdot 3 
-                int dq4 = 9;  // qdot 4 
-                int dq5 = 10; // qdot 5 
-                int dq6 = 11; // qdot 6 
-                int dq7 = 12; // qdot 7 
-                int dq8 = 13; // qdot 8 
+                int dq  = 18; // qdot start index
 
-                int con_slack = 0;  // constraints for slack (0-5)
-                int con_q = 6;      // constraints for q (6-13)
-                int con_qdot = 14;  // constraints for qdot (14-21)
-                int con_qddot = 22; // constraints for qddot (22-29)
+                int con_slack = 0;  // constraints for hand slack (0-17)
+                int con_q = 18;     // constraints for q (18-38)
+                int con_qdot = 39;  // constraints for qdot (39-59)
+                int con_qddot = 60; // constraints for qddot (60-80)
             }si_index_;
 
             Eigen::Matrix<double, JOINT_DOF, 1> q_current_;

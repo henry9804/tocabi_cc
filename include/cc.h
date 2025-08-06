@@ -24,7 +24,7 @@
 #include <sys/stat.h>
 #include <chrono>
 // #include <boost/shared_ptr.hpp>
-#include "QP/QP_cartesian_velocity.h"
+#include "QP/QP_cartesian_velocity_wb.h"
 #include "suhan_benchmark.h"
 
 
@@ -46,7 +46,9 @@ public:
     void ObjPoseCallback(const geometry_msgs::PoseConstPtr &msg);
     void JointTrajectoryCallback(const trajectory_msgs::JointTrajectoryPtr &msg);
     void JointTargetCallback(const sensor_msgs::JointStatePtr &msg);
-    void PoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg);
+    void LhandPoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg);
+    void HeadPoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg);
+    void RhandPoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg);
     void TerminateCallback(const std_msgs::BoolPtr &msg);
     void HandMsgCallback(const std_msgs::Int32Ptr &msg);
     Eigen::Matrix3d Quat2rotmatrix(double q0, double q1, double q2, double q3);
@@ -63,7 +65,9 @@ public:
     ros::Subscriber haptic_pose_sub_;
     ros::Subscriber joint_trajectory_sub;
     ros::Subscriber joint_target_sub;
-    ros::Subscriber pose_target_sub;
+    ros::Subscriber lhand_pose_target_sub;
+    ros::Subscriber head_pose_target_sub;
+    ros::Subscriber rhand_pose_target_sub;
     ros::Publisher haptic_force_pub_;
     ros::Subscriber obj_pose_sub;
     
@@ -105,8 +109,6 @@ public:
     void resetRobotPose(double duration);
     bool target_reached_ = false;
     Eigen::VectorQd q_init_;
-    Eigen::Vector3d rhand_pos_init_;
-    Eigen::Matrix3d rhand_rot_init_;
     double time_init_ = 0.0;
     
     std::string folderPath, filePath_hand, filePath_joint, filePath_info;   // for hand pose and joint
@@ -138,7 +140,7 @@ public:
     Eigen::Matrix<double, MODEL_DOF, MODEL_DOF> kp;
     Eigen::Matrix<double, MODEL_DOF, MODEL_DOF> kv;
 
-    std::unique_ptr<QP::CartesianVelocity> qp_cartesian_velocity_;
+    std::unique_ptr<QP::CartesianVelocityWB> qp_cartesian_velocity_;
     
 private:
     Eigen::VectorQd ControlVal_;

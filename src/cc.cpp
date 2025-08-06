@@ -18,7 +18,9 @@ CustomController::CustomController(RobotData &rd) : rd_(rd) //, wbc_(dc.wbc_)
     obj_pose_sub = nh_cc_.subscribe("/obj_pose", 1, &CustomController::ObjPoseCallback, this);
     joint_trajectory_sub = nh_cc_.subscribe("/tocabi/srmt/trajectory", 1, &CustomController::JointTrajectoryCallback, this);
     joint_target_sub = nh_cc_.subscribe("/tocabi/act/joint_target", 1, &CustomController::JointTargetCallback, this);
-    pose_target_sub = nh_cc_.subscribe("/tocabi/act/pose_target", 1, &CustomController::PoseTargetCallback, this);
+    lhand_pose_target_sub = nh_cc_.subscribe("/tocabi/act/lhand_pose_target", 1, &CustomController::LhandPoseTargetCallback, this);
+    head_pose_target_sub = nh_cc_.subscribe("/tocabi/act/head_pose_target", 1, &CustomController::HeadPoseTargetCallback, this);
+    rhand_pose_target_sub = nh_cc_.subscribe("/tocabi/act/rhand_pose_target", 1, &CustomController::RhandPoseTargetCallback, this);
     haptic_force_pub_ = nh_cc_.advertise<geometry_msgs::Vector3>("/haptic/force", 10);
     ControlVal_.setZero();
     image_transport::ImageTransport it(nh_cc_);
@@ -58,7 +60,7 @@ CustomController::CustomController(RobotData &rd) : rd_(rd) //, wbc_(dc.wbc_)
                     2.0, 2.0,
                     10.0, 28.0, 10.0, 10.0, 10.0, 10.0, 3.0, 3.0;
 
-    qp_cartesian_velocity_ = std::make_unique<QP::CartesianVelocity>();
+    qp_cartesian_velocity_ = std::make_unique<QP::CartesianVelocityWB>();
 }
 
 Eigen::VectorQd CustomController::getControl()
@@ -330,10 +332,10 @@ void CustomController::computeSlow()
 
             if ((prev_mode == 7 && num_success < num_data) || (prev_mode > 7 && num_trials < num_test)){
             // relocate object to new position
-            const double minX = -0.1;
-            const double maxX = 0.1;
-            const double minY = -0.1;
-            const double maxY = 0.1;
+            const double minX = -0.05;  // -0.1;
+            const double maxX = 0.05;   // 0.1;
+            const double minY = -0.05;  // -0.1;
+            const double maxY = 0.05;   // 0.1;
 
             new_obj_pose_msg_.position.x = getRandomPosition(minX, maxX);
             new_obj_pose_msg_.position.y = getRandomPosition(minY, maxY);
@@ -469,45 +471,143 @@ void CustomController::computeSlow()
             rd_.tc_init = false;
             prev_mode = 9;
             
-            rhand_pos_init_ = rd_.link_[Right_Hand].xpos;
-            rhand_rot_init_ = rd_.link_[Right_Hand].rotm;
-            
-            desired_q_ = rd_.q_;
+            t_0_ = rd_.control_time_;
+            rd_.q_desired = rd_.q_;
+            rd_.q_dot_desired.setZero();
+            q_0_ = rd_.q_;
+            joint_target_ = rd_.q_;
             desired_qdot_.setZero();
-            target_received = false;
-        }
+            camera_tick_ = 0;
+            pose_target_received = false;
+            
+            rd_.link_[Left_Hand].x_desired = rd_.link_[Left_Hand].xpos;
+            rd_.link_[Left_Hand].rot_desired = rd_.link_[Left_Hand].rotm;
+            rd_.link_[Head].x_desired = rd_.link_[Head].xpos;
+            rd_.link_[Head].rot_desired = rd_.link_[Head].rotm;
+            rd_.link_[Right_Hand].x_desired = rd_.link_[Right_Hand].xpos;
+            rd_.link_[Right_Hand].rot_desired = rd_.link_[Right_Hand].rotm;
 
-        // get desired pose from GUI taskcommand msg
-        if (!target_received){
+            // get desired pose from GUI taskcommand msg
+            Vector3d lhand_pos_desired_l;
+            lhand_pos_desired_l << rd_.tc_.l_x, rd_.tc_.l_y, rd_.tc_.l_z;
+            rd_.link_[Left_Hand].x_desired += lhand_pos_desired_l;
+            rd_.link_[Left_Hand].rot_desired = DyrosMath::rotateWithX(rd_.tc_.l_roll * DEG2RAD) * DyrosMath::rotateWithY(rd_.tc_.l_pitch * DEG2RAD) * DyrosMath::rotateWithZ(rd_.tc_.l_yaw * DEG2RAD) * DyrosMath::Euler2rot(0, M_PI_2, M_PI_2).transpose();
             Vector3d rhand_pos_desired_l;
             rhand_pos_desired_l << rd_.tc_.r_x, rd_.tc_.r_y, rd_.tc_.r_z;
-            rhand_target_pos_ = rhand_pos_init_ + rhand_pos_desired_l;
-            rhand_target_rotm_ = DyrosMath::rotateWithX(rd_.tc_.r_roll * DEG2RAD) * DyrosMath::rotateWithY(rd_.tc_.r_pitch * DEG2RAD) * DyrosMath::rotateWithZ(rd_.tc_.r_yaw * DEG2RAD) * DyrosMath::Euler2rot(0, M_PI_2, M_PI).transpose();
-        }
-        // else get desired pose from /tocabi/act/pose_target topic callback
+            rd_.link_[Right_Hand].x_desired += rhand_pos_desired_l;
+            rd_.link_[Right_Hand].rot_desired = DyrosMath::rotateWithX(rd_.tc_.r_roll * DEG2RAD) * DyrosMath::rotateWithY(rd_.tc_.r_pitch * DEG2RAD) * DyrosMath::rotateWithZ(rd_.tc_.r_yaw * DEG2RAD) * DyrosMath::Euler2rot(0, M_PI_2, M_PI).transpose();
 
+            // initialize file for data collection
+            init_ = ros::Time::now();
+            std::stringstream folderPathSS;
+            // [Check] ros::Time::now().sec is int32 type.
+            auto now = std::chrono::system_clock::now();
+            std::time_t currentTime = std::chrono::system_clock::to_time_t(now);
+            // folderPathSS << "/home/hokyun20/2024winter_ws/src/camera_pubsub/" << ros::Time::now().sec;
+            folderPathSS << "/home/lyh/tocabi_ws/src/result/" << std::put_time(std::localtime(&currentTime), "%Y%m%d-%H%M%S");
+            folderPath = folderPathSS.str();
+            
+            folderPathSS << "/image";
+            folderPath_image = folderPathSS.str();
+
+            int result1 = mkdir(folderPath.c_str(), 0777);
+            int result2 = mkdir(folderPath_image.c_str(), 0777);
+            if(result1 != 0){
+                ROS_ERROR("Couldn't make folder(dir), Check folderPath");
+            }
+            if(result2 != 0){
+                ROS_ERROR("Couldn't make folder2(dir), Check folderPath2");
+            }
+
+            std::stringstream filePathSS_hand;
+            filePathSS_hand << folderPath << "/hand.txt";
+            filePath_hand = filePathSS_hand.str();
+            fout1.open(filePath_hand);
+            fout1 << "ros_time" << "\t" << "hand_pose_x" << "\t" << "hand_pose_y" << "\t" << "hand_pose_z" << "\t" 
+                  << "hand_pose_qx" << "\t" << "hand_pose_qy" << "\t" << "hand_pose_qz" << "\t" << "hand_pose_qw" << "\t"
+                  << "head_pose_x" << "\t" << "head_pose_y" << "\t" << "heand_pose_z" << "\t" 
+                  << "head_pose_qx" << "\t" << "head_pose_qy" << "\t" << "head_pose_qz" << "head_pose_qw" << "\t" 
+                  << "desired_hand_pose_x" << "\t" << "desired_hand_pose_y" << "\t" << "desired_hand_pose_z" << "\t" 
+                  << "desired_hand_pose_qx" << "\t" << "desired_hand_pose_qy" << "\t" << "desired_hand_pose_qz" << "desired_hand_pose_qw" << "\t" 
+                  << "hand_open_state" << endl; 
+            if(!fout1.is_open()){
+                ROS_ERROR("Couldn't open text file1");
+            }
+
+            std::stringstream filePathSS_joint;
+            filePathSS_joint << folderPath << "/joint.txt";
+            filePath_joint = filePathSS_joint.str();
+            fout2.open(filePath_joint);
+            fout2 << "ros_time" << "\t" 
+                    << "current_joint_pos" << "\t" << "target_joint_pos" << "\t" 
+                    << "current_joint_vel" << "\t" << "target_joint_vel" << "\t" 
+                    << "recieved_target" << endl; 
+            if(!fout2.is_open()){
+                ROS_ERROR("Couldn't open text file2");
+            }
+
+            std::stringstream filePathSS_info;
+            filePathSS_info << folderPath << "/info.txt";
+            filePath_info = filePathSS_info.str();
+            fout3.open(filePath_info);
+            fout3 << "obj_pose_x" << "\t" << "obj_pose_y" << "\t" << "obj_pose_z" << "\t" << "success" << endl;
+            if(!fout3.is_open()){
+                ROS_ERROR("Couldn't open text file3");
+            }
+            
+            new_obj_pose_msg_.position.x = 0.0;
+            new_obj_pose_msg_.position.y = 0.0;
+            new_obj_pose_msg_.position.z = 0.0;
+        }
+
+        // get desired pose from /tocabi/act/pose_target topic callback
+        if (pose_target_received){
+            if(!data_collect_start_){
+                data_collect_start_ = true;
+                fout3 << obj_pos_(0) << "\t" << obj_pos_(1) << "\t" << obj_pos_(2) << "\t";
+                init_ = ros::Time::now();
+            }
+        }
+        // new_obj_pose_msg_.position.y += 0.05/hz_;
+        // new_obj_pose_pub.publish(new_obj_pose_msg_);
+
+        // ==================== QP ====================
+        Eigen::VectorXd gain_diag = Eigen::VectorXd::Zero(6);
+        gain_diag << 5, 5, 5, 5, 5, 5;
         // set QP problem
-        Eigen::Vector6d desired_xdot;
-        desired_xdot.head(3) = rhand_target_pos_ - rd_.link_[Right_Hand].xpos;
-        desired_xdot.tail(3) = DyrosMath::getPhi(rhand_target_rotm_, rd_.link_[Right_Hand].rotm);
-        qp_cartesian_velocity_->setCurrentState(rd_.q_.tail(8), rd_.q_dot_.tail(8), rd_.link_[Right_Hand].Jac().block(0, 31, 6, 8));
-        qp_cartesian_velocity_->setDesiredEEVel(desired_xdot);
+        Eigen::VectorXd lhand_error = Eigen::VectorXd::Zero(6);
+        lhand_error.head(3) = rd_.link_[Left_Hand].x_desired - rd_.link_[Left_Hand].xpos;
+        lhand_error.tail(3) = DyrosMath::getPhi(rd_.link_[Left_Hand].rot_desired, rd_.link_[Left_Hand].rotm);
+        Eigen::VectorXd head_error = Eigen::VectorXd::Zero(6);
+        head_error.head(3) = rd_.link_[Head].x_desired - rd_.link_[Head].xpos;
+        head_error.tail(3) = DyrosMath::getPhi(rd_.link_[Head].rot_desired, rd_.link_[Head].rotm);
+        Eigen::VectorXd rhand_error = Eigen::VectorXd::Zero(6);
+        rhand_error.head(3) = rd_.link_[Right_Hand].x_desired - rd_.link_[Right_Hand].xpos;
+        rhand_error.tail(3) = DyrosMath::getPhi(rd_.link_[Right_Hand].rot_desired, rd_.link_[Right_Hand].rotm);
+
+        Eigen::Matrix<double, 18, 21> Jacobian;
+        Jacobian.setZero();
+        Jacobian.block(0, 0, 6, 21) = rd_.link_[Left_Hand].Jac().block(0, 18, 6, 21);
+        Jacobian.block(6, 0, 6, 21) = rd_.link_[Head].Jac().block(0, 18, 6, 21);
+        Jacobian.block(12, 0, 6, 21) = rd_.link_[Right_Hand].Jac().block(0, 18, 6, 21);
+        qp_cartesian_velocity_->setCurrentState(rd_.q_.tail(21), rd_.q_dot_desired.tail(21), Jacobian);
+        qp_cartesian_velocity_->setDesiredEEVel(gain_diag.asDiagonal()*lhand_error, gain_diag.asDiagonal()*head_error, gain_diag.asDiagonal()*rhand_error);
 
         // solve QP
-        Eigen::Matrix<double, 8, 1> opt_qdot;
-        QP::TimeDuration time_status;
-        int status = qp_cartesian_velocity_->getOptJointVel(opt_qdot, time_status);
-        if(status != 0)
+        Eigen::Matrix<double, 21, 1> opt_qdot;
+        if(!qp_cartesian_velocity_->getOptJointVel(opt_qdot))
         {
             ROS_INFO("QP did not solved!!!");
-            std::cout << "\t\t\t\t error code: " << status << std::endl;
         }
 
-        desired_qdot_.tail(8) = opt_qdot;        
-        desired_q_ += desired_qdot_ / hz_;
+        rd_.q_dot_desired.tail(21) = opt_qdot;
+        rd_.q_desired.tail(21) += opt_qdot / hz_;
 
         // torque PD control
-        rd_.torque_desired =  kp * (desired_q_ - rd_.q_) + kv * (desired_qdot_ - rd_.q_dot_);
+        WBC::SetContact(rd_, 1, 1);
+        rd_.torque_grav = WBC::ContactForceRedistributionTorque(rd_, WBC::GravityCompensationTorque(rd_));
+        // rd_.torque_grav = WBC::GravityCompensationTorque(rd_);
+        rd_.torque_desired = kp * (rd_.q_desired - rd_.q_) + kv * (rd_.q_dot_desired - rd_.q_dot_) + rd_.torque_grav;
 
         double elapsed_time = cc_timer_.elapsedAndReset();
         // cout << elapsed_time * 1000 << " ms" << endl;
@@ -607,10 +707,22 @@ void CustomController::JointTargetCallback(const sensor_msgs::JointStatePtr &msg
     joint_target_received = true;
 }
 
-void CustomController::PoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg)
+void CustomController::LHandPoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg)
 {
-    rhand_target_pos_ << msg->pose.position.x, msg->pose.position.y, msg->pose.position.z;
-    rhand_target_rotm_ = CustomController::Quat2rotmatrix(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z);
+    rd_.link_[Left_Hand].x_desired << msg->pose.position.x, msg->pose.position.y, msg->pose.position.z;
+    rd_.link_[Left_Hand].rot_desired = CustomController::Quat2rotmatrix(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z);
+}
+
+void CustomController::HeadPoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg)
+{
+    rd_.link_[Head].x_desired << msg->pose.position.x, msg->pose.position.y, msg->pose.position.z;
+    rd_.link_[Head].rot_desired = CustomController::Quat2rotmatrix(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z);
+}
+
+void CustomController::RHandPoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg)
+{
+    rd_.link_[Right_Hand].x_desired << msg->pose.position.x, msg->pose.position.y, msg->pose.position.z;
+    rd_.link_[Right_Hand].rot_desired = CustomController::Quat2rotmatrix(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z);
     pose_target_received = true;
 }
 
