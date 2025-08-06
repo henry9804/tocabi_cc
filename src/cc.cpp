@@ -18,9 +18,9 @@ CustomController::CustomController(RobotData &rd) : rd_(rd) //, wbc_(dc.wbc_)
     obj_pose_sub = nh_cc_.subscribe("/obj_pose", 1, &CustomController::ObjPoseCallback, this);
     joint_trajectory_sub = nh_cc_.subscribe("/tocabi/srmt/trajectory", 1, &CustomController::JointTrajectoryCallback, this);
     joint_target_sub = nh_cc_.subscribe("/tocabi/act/joint_target", 1, &CustomController::JointTargetCallback, this);
-    lhand_pose_target_sub = nh_cc_.subscribe("/tocabi/act/lhand_pose_target", 1, &CustomController::LhandPoseTargetCallback, this);
+    lhand_pose_target_sub = nh_cc_.subscribe("/tocabi/act/lhand_pose_target", 1, &CustomController::LHandPoseTargetCallback, this);
     head_pose_target_sub = nh_cc_.subscribe("/tocabi/act/head_pose_target", 1, &CustomController::HeadPoseTargetCallback, this);
-    rhand_pose_target_sub = nh_cc_.subscribe("/tocabi/act/rhand_pose_target", 1, &CustomController::RhandPoseTargetCallback, this);
+    rhand_pose_target_sub = nh_cc_.subscribe("/tocabi/act/rhand_pose_target", 1, &CustomController::RHandPoseTargetCallback, this);
     haptic_force_pub_ = nh_cc_.advertise<geometry_msgs::Vector3>("/haptic/force", 10);
     ControlVal_.setZero();
     image_transport::ImageTransport it(nh_cc_);

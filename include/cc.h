@@ -46,9 +46,9 @@ public:
     void ObjPoseCallback(const geometry_msgs::PoseConstPtr &msg);
     void JointTrajectoryCallback(const trajectory_msgs::JointTrajectoryPtr &msg);
     void JointTargetCallback(const sensor_msgs::JointStatePtr &msg);
-    void LhandPoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg);
+    void LHandPoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg);
     void HeadPoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg);
-    void RhandPoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg);
+    void RHandPoseTargetCallback(const geometry_msgs::PoseStampedPtr &msg);
     void TerminateCallback(const std_msgs::BoolPtr &msg);
     void HandMsgCallback(const std_msgs::Int32Ptr &msg);
     Eigen::Matrix3d Quat2rotmatrix(double q0, double q1, double q2, double q3);
