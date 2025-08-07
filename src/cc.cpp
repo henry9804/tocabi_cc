@@ -1,9 +1,5 @@
 #include "cc.h"
 
-std::default_random_engine generator;
-ros::Publisher new_cup_pos_pub;
-geometry_msgs::Point new_cup_pos_msg_;
-
 using namespace TOCABI;
 
 
@@ -18,7 +14,9 @@ CustomController::CustomController(RobotData &rd) : rd_(rd)
 
     // for act (lyh)
     joint_target_sub_ = nh_cc_.subscribe("/tocabi/act/joint_target", 1, &CustomController::TargetJointCallback, this);
-    pose_target_sub_ = nh_cc_.subscribe("/tocabi/act/pose_target", 1, &CustomController::TargetRHandPoseCallback, this);
+    lhand_pose_target_sub_ = nh_cc_.subscribe("/tocabi/act/lhand_pose_target", 1, &CustomController::TargetLHandPoseCallback, this);
+    head_pose_target_sub_ = nh_cc_.subscribe("/tocabi/act/head_pose_target", 1, &CustomController::TargetHeadPoseCallback, this);
+    rhand_pose_target_sub_ = nh_cc_.subscribe("/tocabi/act/rhand_pose_target", 1, &CustomController::TargetRHandPoseCallback, this);
 
     // for data logging
     robot_pose_pub = nh_cc_.advertise<geometry_msgs::PoseArray>("/tocabi/robot_poses", 1);
@@ -43,7 +41,7 @@ CustomController::CustomController(RobotData &rd) : rd_(rd)
                     2.0, 2.0,
                     10.0, 28.0, 10.0, 10.0, 10.0, 10.0, 3.0, 3.0;
 
-    qp_cartesian_velocity_ = std::make_unique<QP::CartesianVelocity>();
+    qp_cartesian_velocity_ = std::make_unique<QP::CartesianVelocityWB>();
     target_robot_poses_local_.resize(4); // left hand, upper body, head, right hand
     target_robot_poses_world_.resize(4); // left hand, upper body, head, right hand
     for (auto &pose : target_robot_poses_local_) pose.setIdentity();
@@ -63,7 +61,7 @@ void CustomController::computeSlow()
     // MODE 6,7,8 are reserved for cc
     // MODE 6: joint command
     // MODE 7: CLIK for right hand
-    // MODE 8: QP for right hand
+    // MODE 8: QP for head, right and left hand
     // MODE 9: HQP OSF for upper body, head, right and left hand
     queue_cc_.callAvailable(ros::WallDuration());
 
@@ -230,26 +228,36 @@ void CustomController::computeSlow()
     else if (rd_.tc_.mode == 8)
     {
         // ==================== QP ====================
-        // set QP problem
-        Eigen::VectorXd x_error = Eigen::VectorXd::Zero(6);
-        x_error.head(3) = rd_.link_[Right_Hand].x_traj - rd_.link_[Right_Hand].xpos;
-        x_error.tail(3) = DyrosMath::getPhi(rd_.link_[Right_Hand].r_traj, rd_.link_[Right_Hand].rotm);
-
         Eigen::VectorXd gain_diag = Eigen::VectorXd::Zero(6);
         gain_diag << 5, 5, 5, 5, 5, 5;
+        // set QP problem
+        Eigen::VectorXd lhand_error = Eigen::VectorXd::Zero(6);
+        lhand_error.head(3) = rd_.link_[Left_Hand].x_desired - rd_.link_[Left_Hand].xpos;
+        lhand_error.tail(3) = DyrosMath::getPhi(rd_.link_[Left_Hand].rot_desired, rd_.link_[Left_Hand].rotm);
+        Eigen::VectorXd head_error = Eigen::VectorXd::Zero(6);
+        head_error.head(3) = rd_.link_[Head].x_desired - rd_.link_[Head].xpos;
+        head_error.tail(3) = DyrosMath::getPhi(rd_.link_[Head].rot_desired, rd_.link_[Head].rotm);
+        Eigen::VectorXd rhand_error = Eigen::VectorXd::Zero(6);
+        rhand_error.head(3) = rd_.link_[Right_Hand].x_desired - rd_.link_[Right_Hand].xpos;
+        rhand_error.tail(3) = DyrosMath::getPhi(rd_.link_[Right_Hand].rot_desired, rd_.link_[Right_Hand].rotm);
 
-        qp_cartesian_velocity_->setCurrentState(rd_.q_.tail(8), rd_.q_dot_desired.tail(8), rd_.link_[Right_Hand].Jac().block(0, 31, 6, 8));
-        qp_cartesian_velocity_->setDesiredEEVel(gain_diag.asDiagonal()*x_error);
+        Eigen::Matrix<double, 18, 21> Jacobian;
+        Jacobian.setZero();
+        Jacobian.block(0, 0, 6, 21) = rd_.link_[Left_Hand].Jac().block(0, 18, 6, 21);
+        Jacobian.block(6, 0, 6, 21) = rd_.link_[Head].Jac().block(0, 18, 6, 21);
+        Jacobian.block(12, 0, 6, 21) = rd_.link_[Right_Hand].Jac().block(0, 18, 6, 21);
+        qp_cartesian_velocity_->setCurrentState(rd_.q_.tail(21), rd_.q_dot_desired.tail(21), Jacobian);
+        qp_cartesian_velocity_->setDesiredEEVel(gain_diag.asDiagonal()*lhand_error, gain_diag.asDiagonal()*head_error, gain_diag.asDiagonal()*rhand_error);
 
         // solve QP
-        Eigen::Matrix<double, 8, 1> opt_qdot;
+        Eigen::Matrix<double, 21, 1> opt_qdot;
         if(!qp_cartesian_velocity_->getOptJointVel(opt_qdot))
         {
             ROS_INFO("QP did not solved!!!");
         }
 
         rd_.q_dot_desired.setZero();
-        rd_.q_dot_desired.tail(8) = opt_qdot;        
+        rd_.q_dot_desired.tail(21) = opt_qdot;
         
         rd_.q_desired += rd_.q_dot_desired / hz_;
         if(rd_.control_time_ - time_init_ < 2.0)
@@ -593,6 +601,40 @@ void CustomController::TargetPosesCallback(const geometry_msgs::PoseArrayPtr &ms
 
     if(is_world_base_) target_robot_poses_world_ = temp_target_poses;
     else  target_robot_poses_local_ = temp_target_poses;
+}
+
+void CustomController::TargetLHandPoseCallback(const geometry_msgs::PoseStampedPtr &msg)
+{
+    // left hand
+    Eigen::Affine3d temp_target_lhand_pose;
+    temp_target_lhand_pose.translation() << msg->pose.position.x,
+                                            msg->pose.position.y,
+                                            msg->pose.position.z;
+    Eigen::Quaterniond target_quat_lhand(msg->pose.orientation.w,
+                                         msg->pose.orientation.x,
+                                         msg->pose.orientation.y,
+                                         msg->pose.orientation.z);
+    temp_target_lhand_pose.linear() = target_quat_lhand.toRotationMatrix();
+
+    if(is_world_base_) target_robot_poses_world_[0] = temp_target_lhand_pose;
+    else  target_robot_poses_local_[0] = temp_target_lhand_pose;
+}
+
+void CustomController::TargetHeadPoseCallback(const geometry_msgs::PoseStampedPtr &msg)
+{
+    // head
+    Eigen::Affine3d temp_target_head_pose;
+    temp_target_head_pose.translation() << msg->pose.position.x,
+                                            msg->pose.position.y,
+                                            msg->pose.position.z;
+    Eigen::Quaterniond target_quat_head(msg->pose.orientation.w,
+                                         msg->pose.orientation.x,
+                                         msg->pose.orientation.y,
+                                         msg->pose.orientation.z);
+    temp_target_head_pose.linear() = target_quat_head.toRotationMatrix();
+
+    if(is_world_base_) target_robot_poses_world_[2] = temp_target_head_pose;
+    else  target_robot_poses_local_[2] = temp_target_head_pose;
 }
 
 void CustomController::TargetRHandPoseCallback(const geometry_msgs::PoseStampedPtr &msg)

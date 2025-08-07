@@ -19,7 +19,7 @@
 #include <sys/stat.h>
 #include <chrono>
 // #include <boost/shared_ptr.hpp>
-#include "QP/QP_cartesian_velocity.h"
+#include "QP/QP_cartesian_velocity_wb.h"
 
 class CustomController
 {
@@ -36,6 +36,8 @@ public:
 
     void TargetPosesCallback(const geometry_msgs::PoseArrayPtr &msg);
     void TargetJointCallback(const sensor_msgs::JointStatePtr &msg);
+    void TargetLHandPoseCallback(const geometry_msgs::PoseStampedPtr &msg);
+    void TargetHeadPoseCallback(const geometry_msgs::PoseStampedPtr &msg);
     void TargetRHandPoseCallback(const geometry_msgs::PoseStampedPtr &msg);
 
     RobotData &rd_;
@@ -57,7 +59,9 @@ public:
     ros::Subscriber target_rhand_pose_sub_; // only for right hand
 
     ros::Subscriber joint_target_sub_;
-    ros::Subscriber pose_target_sub_;
+    ros::Subscriber lhand_pose_target_sub_;
+    ros::Subscriber head_pose_target_sub_;
+    ros::Subscriber rhand_pose_target_sub_;
 
     //////////jh OSF & QP controller performance checking data////////
     ros::Publisher desired_robot_pose_pub_; // left hand, head, right hand
@@ -72,7 +76,7 @@ public:
     std::vector<Eigen::Affine3d> target_robot_poses_local_; // left hand, upper body, head, right hand
     std::vector<Eigen::Affine3d> target_robot_poses_world_; // left hand, upper body, head, right hand
 
-    std::unique_ptr<QP::CartesianVelocity> qp_cartesian_velocity_;
+    std::unique_ptr<QP::CartesianVelocityWB> qp_cartesian_velocity_;
 
     bool is_world_base_{true};
     bool is_qp_first_{true};
