@@ -1,6 +1,7 @@
 #include "tocabi_lib/robot_data.h"
 #include "wholebody_functions.h"
 #include "geometry_msgs/Pose.h"
+#include "geometry_msgs/PoseArray.h"
 #include "geometry_msgs/PoseStamped.h"
 #include "geometry_msgs/Vector3.h"
 #include "sensor_msgs/JointState.h"
@@ -18,26 +19,24 @@
 #include <sys/stat.h>
 #include <chrono>
 // #include <boost/shared_ptr.hpp>
-
+#include "QP/QP_cartesian_velocity.h"
 
 class CustomController
 {
 public:
     CustomController(RobotData &rd);
-    Eigen::VectorQd getControl();
-
-    //void taskCommandToCC(TaskCommand tc_);
+    Eigen::VectorQd getControl() {return ControlVal_;}
     
     void computeSlow();
     void computeFast();
     void computePlanner();
     void copyRobotData(RobotData &rd_l);
 
-    void ModeCallback(const std_msgs::Int32Ptr &msg);
-    void JointTargetCallback(const sensor_msgs::JointStatePtr &msg);
-    Eigen::Matrix3d Quat2rotmatrix(double q0, double q1, double q2, double q3);
-    Eigen::MatrixXd LowPassFilter(const Eigen::MatrixXd &input, const Eigen::MatrixXd &prev_res, const double &sampling_freq, const double &cutoff_freq);
+    void resetRobotPose(double duration);
 
+    void TargetPosesCallback(const geometry_msgs::PoseArrayPtr &msg);
+    void TargetJointCallback(const sensor_msgs::JointStatePtr &msg);
+    void TargetRHandPoseCallback(const geometry_msgs::PoseStampedPtr &msg);
 
     RobotData &rd_;
     RobotData rd_cc_;
@@ -47,52 +46,45 @@ public:
     ros::Subscriber mode_sub;
     ros::Subscriber joint_target_sub;
 
-    bool des_r_subscribed=false;
-    Eigen::Vector3d des_r_pos_;
-    Eigen::Vector3d des_r_ori_;
-    Eigen::Matrix3d des_r_orientation_;
-    
-    Eigen::VectorQd desired_q_;
-    Eigen::VectorQd desired_qdot_;
-
-    bool target_received = false;
-    double t_0_;
-    std::vector<double> right_arm_target_first;
-    std::vector<double> right_arm_target;
-
-    std::vector<std::string> joint_names_;
-    std::vector<double> joint_target_;
-    Eigen::VectorQd q_0_;
-    Eigen::VectorQd qdot_0_;
-
-
-    void resetRobotPose(double duration);
-    Eigen::VectorQd q_init_;
+    VectorQd q_init_;
+    VectorQd qdot_init_;
     double time_init_ = 0.0;
     
-    std::string folderPath, filePath_hand, filePath_joint;   // for hand pose and joint
-    std::ofstream fout;
+    ros::Publisher robot_pose_pub;
+    geometry_msgs::PoseArray robot_pose_msg;
 
-    // float pos_x_;
+    ros::Subscriber target_pose_sub_; // left hand, upper body, head, right hand
+    ros::Subscriber target_rhand_pose_sub_; // only for right hand
 
-    //WholebodyController &wbc_;
-    //TaskCommand tc;
+    ros::Subscriber joint_target_sub_;
+    ros::Subscriber pose_target_sub_;
 
-    double rr_, rp_, ry_;
-    double drr_, drp_, dry_;
-    Matrix3d hand_r_rot_desired_past;
+    //////////jh OSF & QP controller performance checking data////////
+    ros::Publisher desired_robot_pose_pub_; // left hand, head, right hand
+    geometry_msgs::PoseArray desired_robot_pose_msg_; // left hand, head, right hand
+    ros::Publisher desired_joint_pub_; 
+    ros::Publisher robot_joint_pub_;
 
-    Eigen::Matrix3d eulerRotation(double roll, double pitch, double yaw) {
-        // Yaw, pitch, roll 순서로 회전 행렬 생성
-        Eigen::Matrix3d rotation;
-        rotation = Eigen::AngleAxisd(yaw, Eigen::Vector3d::UnitZ()) *
-                Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
-                Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX());
-        return rotation;
-    }
 
+    Eigen::Matrix<double, MODEL_DOF, MODEL_DOF> kp;
+    Eigen::Matrix<double, MODEL_DOF, MODEL_DOF> kv;
+
+    std::vector<Eigen::Affine3d> target_robot_poses_local_; // left hand, upper body, head, right hand
+    std::vector<Eigen::Affine3d> target_robot_poses_world_; // left hand, upper body, head, right hand
+
+    std::unique_ptr<QP::CartesianVelocity> qp_cartesian_velocity_;
+
+    bool is_world_base_{true};
+    bool is_qp_first_{true};
+
+    Eigen::VectorQd q_desired_, q_dot_desired_;
+    std::vector<double> target_q_, target_q_dot_;
+    std::vector<std::string> target_names_;
+    bool is_q_target_{false};
+    
 
 private:
     Eigen::VectorQd ControlVal_;
+    const double hz_ = 2000.0;
     map<std::string, int> JOINT_INDEX;
 };
