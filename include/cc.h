@@ -34,15 +34,11 @@ public:
     CustomController(RobotData &rd);
     Eigen::VectorQd getControl();
 
-    //void taskCommandToCC(TaskCommand tc_);
-    
     void computeSlow();
     void computeFast();
     void computePlanner();
     void copyRobotData(RobotData &rd_l);
-    void PublishHapticData();
 
-    void HapticPoseCallback(const geometry_msgs::PoseConstPtr &msg);
     void ObjPoseCallback(const geometry_msgs::PoseConstPtr &msg);
     void JointTrajectoryCallback(const trajectory_msgs::JointTrajectoryPtr &msg);
     void JointTargetCallback(const sensor_msgs::JointStatePtr &msg);
@@ -62,18 +58,14 @@ public:
 
     ros::NodeHandle nh_cc_;
     ros::CallbackQueue queue_cc_;
-    ros::Subscriber haptic_pose_sub_;
     ros::Subscriber joint_trajectory_sub;
     ros::Subscriber joint_target_sub;
     ros::Subscriber lhand_pose_target_sub;
     ros::Subscriber head_pose_target_sub;
     ros::Subscriber rhand_pose_target_sub;
-    ros::Publisher haptic_force_pub_;
     ros::Subscriber obj_pose_sub;
-    
-    Eigen::Vector3d haptic_pos_;
-    Eigen::Vector4d haptic_ori_;
-    Eigen::Matrix3d haptic_orientation_;
+    ros::Publisher new_obj_pose_pub;
+
     Eigen::Vector3d obj_pos_;
     Eigen::VectorQd desired_q_;
     Eigen::VectorQd desired_qdot_;
@@ -97,6 +89,7 @@ public:
     ros::Publisher hand_open_pub;
     ros::Subscriber hand_open_sub;
     std_msgs::Int32 hand_open_msg;
+    geometry_msgs::Pose new_obj_pose_msg_;
 
     void publishRobotPoses();
     ros::Publisher robot_pose_pub;
@@ -115,12 +108,8 @@ public:
     std::string folderPath_image, fileName_image, filePath_image;           // for images
     std::ofstream fout1, fout2, fout3;
 
-    // float pos_x_;
-
     //WholebodyController &wbc_;
     //TaskCommand tc;
-
-    double haptic_force_[3];
 
     ros::Publisher camera_flag_pub;
     std_msgs::Bool camera_flag_msg;

@@ -1,8 +1,6 @@
 #include "cc.h"
 
 std::mt19937_64 generator(0);
-ros::Publisher new_obj_pose_pub;
-geometry_msgs::Pose new_obj_pose_msg_;
 ros::Time init_;
 bool is_reached = false;
 int num_success = 0;
@@ -14,14 +12,12 @@ using namespace TOCABI;
 CustomController::CustomController(RobotData &rd) : rd_(rd) //, wbc_(dc.wbc_)
 {
     nh_cc_.setCallbackQueue(&queue_cc_);
-    haptic_pose_sub_ = nh_cc_.subscribe("/haptic/pose", 1, &CustomController::HapticPoseCallback, this);
     obj_pose_sub = nh_cc_.subscribe("/obj_pose", 1, &CustomController::ObjPoseCallback, this);
     joint_trajectory_sub = nh_cc_.subscribe("/tocabi/srmt/trajectory", 1, &CustomController::JointTrajectoryCallback, this);
     joint_target_sub = nh_cc_.subscribe("/tocabi/act/joint_target", 1, &CustomController::JointTargetCallback, this);
     lhand_pose_target_sub = nh_cc_.subscribe("/tocabi/act/lhand_pose_target", 1, &CustomController::LHandPoseTargetCallback, this);
     head_pose_target_sub = nh_cc_.subscribe("/tocabi/act/head_pose_target", 1, &CustomController::HeadPoseTargetCallback, this);
     rhand_pose_target_sub = nh_cc_.subscribe("/tocabi/act/rhand_pose_target", 1, &CustomController::RHandPoseTargetCallback, this);
-    haptic_force_pub_ = nh_cc_.advertise<geometry_msgs::Vector3>("/haptic/force", 10);
     ControlVal_.setZero();
     image_transport::ImageTransport it(nh_cc_);
     robot_pose_pub = nh_cc_.advertise<geometry_msgs::PoseArray>("/tocabi/robot_poses", 1);
@@ -66,21 +62,6 @@ CustomController::CustomController(RobotData &rd) : rd_(rd) //, wbc_(dc.wbc_)
 Eigen::VectorQd CustomController::getControl()
 {
     return ControlVal_;
-}
-
-// void CustomController::taskCommandToCC(TaskCommand tc_)
-// {
-//     tc = tc_;
-// }
-
-void CustomController::PublishHapticData()
-{
-    geometry_msgs::Vector3 force;
-    force.x = haptic_force_[0];
-    force.y = haptic_force_[1];
-    force.z = haptic_force_[2];
-
-    haptic_force_pub_.publish(force);
 }
 
 double getRandomPosition(double minValue, double maxValue) 
@@ -191,104 +172,7 @@ void CustomController::computeSlow()
     }
     pub_cnt++;
     
-    if (rd_.tc_.mode == 8)
-    {
-        // initialize tc, executed only once
-        if (rd_.tc_init){
-            std::cout << "mode 8 init!" << std::endl;
-            rd_.tc_init = false;
-            prev_mode = 8;
-
-            camera_tick_ = 0;
-            joint_target_received = false;
-
-            desired_q_ = rd_.q_;
-            joint_target_ = rd_.q_;
-            desired_qdot_.setZero();
-        
-            // initialize file for data collection
-            std::stringstream folderPathSS;
-            // [Check] ros::Time::now().sec is int32 type.
-            auto now = std::chrono::system_clock::now();
-            std::time_t currentTime = std::chrono::system_clock::to_time_t(now);
-            // folderPathSS << "/home/hokyun20/2024winter_ws/src/camera_pubsub/" << ros::Time::now().sec;
-            folderPathSS << "/home/lyh/tocabi_ws/src/result/" << std::put_time(std::localtime(&currentTime), "%Y%m%d-%H%M%S");
-            folderPath = folderPathSS.str();
-            
-            folderPathSS << "/image";
-            folderPath_image = folderPathSS.str();
-
-            int result1 = mkdir(folderPath.c_str(), 0777);
-            int result2 = mkdir(folderPath_image.c_str(), 0777);
-            if(result1 != 0){
-                ROS_ERROR("Couldn't make folder(dir), Check folderPath");
-            }
-            if(result2 != 0){
-                ROS_ERROR("Couldn't make folder2(dir), Check folderPath2");
-            }
-
-            std::stringstream filePathSS_hand;
-            filePathSS_hand << folderPath << "/hand.txt";
-            filePath_hand = filePathSS_hand.str();
-            fout1.open(filePath_hand);
-            fout1 << "ros_time" << "\t" << "hand_pose_x" << "\t" << "hand_pose_y" << "\t" << "hand_pose_z" << "\t" 
-                  << "hand_pose_qx" << "\t" << "hand_pose_qy" << "\t" << "hand_pose_qz" << "\t" << "hand_pose_qw" << "\t"
-                  << "head_pose_x" << "\t" << "head_pose_y" << "\t" << "heand_pose_z" << "\t" 
-                  << "head_pose_qx" << "\t" << "head_pose_qy" << "\t" << "head_pose_qz" << "head_pose_qw" << "\t" 
-                  << "desired_hand_pose_x" << "\t" << "desired_hand_pose_y" << "\t" << "desired_hand_pose_z" << "\t" 
-                  << "desired_hand_pose_qx" << "\t" << "desired_hand_pose_qy" << "\t" << "desired_hand_pose_qz" << "desired_hand_pose_qw" << "\t" 
-                  << "hand_open_state" << endl; 
-            if(!fout1.is_open()){
-                ROS_ERROR("Couldn't open text file1");
-            }
-
-            std::stringstream filePathSS_joint;
-            filePathSS_joint << folderPath << "/joint.txt";
-            filePath_joint = filePathSS_joint.str();
-            fout2.open(filePath_joint);
-            fout2 << "ros_time" << "\t" 
-                    << "current_joint_pos" << "\t" << "target_joint_pos" << "\t" 
-                    << "current_joint_vel" << "\t" << "target_joint_vel" << "\t" 
-                    << "recieved_target" << endl; 
-            if(!fout2.is_open()){
-                ROS_ERROR("Couldn't open text file2");
-            }
-
-            std::stringstream filePathSS_info;
-            filePathSS_info << folderPath << "/info.txt";
-            filePath_info = filePathSS_info.str();
-            fout3.open(filePath_info);
-            fout3 << "obj_pose_x" << "\t" << "obj_pose_y" << "\t" << "obj_pose_z" << "\t" << "success" << endl;
-            if(!fout3.is_open()){
-                ROS_ERROR("Couldn't open text file3");
-            }
-        }
-        
-        if(joint_target_received){
-            if(!data_collect_start_){
-                data_collect_start_ = true;
-                fout3 << obj_pos_(0) << "\t" << obj_pos_(1) << "\t" << obj_pos_(2) << "\t";
-                init_ = ros::Time::now();
-            }
-            // compute current distance between hand and obj for terminal condition check
-            Eigen::Vector3d rhand_pos_;
-            rhand_pos_ << rd_.link_[Right_Hand].xpos;
-
-            WBC::SetContact(rd_, rd_.tc_.left_foot, rd_.tc_.right_foot, rd_.tc_.left_hand, rd_.tc_.right_hand);
-            // rd_.torque_grav = WBC::GravityCompensationTorque(rd_);
-
-            double t_ = rd_.control_time_;
-            double dt = 1/30;
-            for(int i = 0; i < MODEL_DOF; i++){
-                desired_q_[i] = DyrosMath::cubic(t_, t_0_, t_0_+dt, q_0_[i], joint_target_[i], qdot_0_[i], 0);
-                desired_qdot_[i] = DyrosMath::cubicDot(t_, t_0_, t_0_+dt, q_0_[i], joint_target_[i], qdot_0_[i], 0);
-            }
-        }
-        for (int i = 0; i < MODEL_DOF; i++){
-            rd_.torque_desired[i] = rd_.pos_kp_v[i] * (desired_q_[i] - rd_.q_[i]) + rd_.pos_kv_v[i] * (desired_qdot_[i] - rd_.q_dot_[i]);
-        }
-    }
-    else if (rd_.tc_.mode == 6)
+    if (rd_.tc_.mode == 6)
     {
         // initialize tc, executed only once
         if (rd_.tc_init){
@@ -353,6 +237,7 @@ void CustomController::computeSlow()
             rd_.tc_init = true;
         }
     }
+
     else if (rd_.tc_.mode == 7)
     {
         // initialize tc, executed only once
@@ -463,6 +348,104 @@ void CustomController::computeSlow()
         rd_.torque_desired =  kp * (desired_q_ - rd_.q_) + kv * (desired_qdot_ - rd_.q_dot_);
     }
 
+    else if (rd_.tc_.mode == 8)
+    {
+        // initialize tc, executed only once
+        if (rd_.tc_init){
+            std::cout << "mode 8 init!" << std::endl;
+            rd_.tc_init = false;
+            prev_mode = 8;
+
+            camera_tick_ = 0;
+            joint_target_received = false;
+
+            desired_q_ = rd_.q_;
+            joint_target_ = rd_.q_;
+            desired_qdot_.setZero();
+        
+            // initialize file for data collection
+            std::stringstream folderPathSS;
+            // [Check] ros::Time::now().sec is int32 type.
+            auto now = std::chrono::system_clock::now();
+            std::time_t currentTime = std::chrono::system_clock::to_time_t(now);
+            // folderPathSS << "/home/hokyun20/2024winter_ws/src/camera_pubsub/" << ros::Time::now().sec;
+            folderPathSS << "/home/lyh/tocabi_ws/src/result/" << std::put_time(std::localtime(&currentTime), "%Y%m%d-%H%M%S");
+            folderPath = folderPathSS.str();
+            
+            folderPathSS << "/image";
+            folderPath_image = folderPathSS.str();
+
+            int result1 = mkdir(folderPath.c_str(), 0777);
+            int result2 = mkdir(folderPath_image.c_str(), 0777);
+            if(result1 != 0){
+                ROS_ERROR("Couldn't make folder(dir), Check folderPath");
+            }
+            if(result2 != 0){
+                ROS_ERROR("Couldn't make folder2(dir), Check folderPath2");
+            }
+
+            std::stringstream filePathSS_hand;
+            filePathSS_hand << folderPath << "/hand.txt";
+            filePath_hand = filePathSS_hand.str();
+            fout1.open(filePath_hand);
+            fout1 << "ros_time" << "\t" << "hand_pose_x" << "\t" << "hand_pose_y" << "\t" << "hand_pose_z" << "\t" 
+                  << "hand_pose_qx" << "\t" << "hand_pose_qy" << "\t" << "hand_pose_qz" << "\t" << "hand_pose_qw" << "\t"
+                  << "head_pose_x" << "\t" << "head_pose_y" << "\t" << "heand_pose_z" << "\t" 
+                  << "head_pose_qx" << "\t" << "head_pose_qy" << "\t" << "head_pose_qz" << "head_pose_qw" << "\t" 
+                  << "desired_hand_pose_x" << "\t" << "desired_hand_pose_y" << "\t" << "desired_hand_pose_z" << "\t" 
+                  << "desired_hand_pose_qx" << "\t" << "desired_hand_pose_qy" << "\t" << "desired_hand_pose_qz" << "desired_hand_pose_qw" << "\t" 
+                  << "hand_open_state" << endl; 
+            if(!fout1.is_open()){
+                ROS_ERROR("Couldn't open text file1");
+            }
+
+            std::stringstream filePathSS_joint;
+            filePathSS_joint << folderPath << "/joint.txt";
+            filePath_joint = filePathSS_joint.str();
+            fout2.open(filePath_joint);
+            fout2 << "ros_time" << "\t" 
+                    << "current_joint_pos" << "\t" << "target_joint_pos" << "\t" 
+                    << "current_joint_vel" << "\t" << "target_joint_vel" << "\t" 
+                    << "recieved_target" << endl; 
+            if(!fout2.is_open()){
+                ROS_ERROR("Couldn't open text file2");
+            }
+
+            std::stringstream filePathSS_info;
+            filePathSS_info << folderPath << "/info.txt";
+            filePath_info = filePathSS_info.str();
+            fout3.open(filePath_info);
+            fout3 << "obj_pose_x" << "\t" << "obj_pose_y" << "\t" << "obj_pose_z" << "\t" << "success" << endl;
+            if(!fout3.is_open()){
+                ROS_ERROR("Couldn't open text file3");
+            }
+        }
+        
+        if(joint_target_received){
+            if(!data_collect_start_){
+                data_collect_start_ = true;
+                fout3 << obj_pos_(0) << "\t" << obj_pos_(1) << "\t" << obj_pos_(2) << "\t";
+                init_ = ros::Time::now();
+            }
+            // compute current distance between hand and obj for terminal condition check
+            Eigen::Vector3d rhand_pos_;
+            rhand_pos_ << rd_.link_[Right_Hand].xpos;
+
+            WBC::SetContact(rd_, rd_.tc_.left_foot, rd_.tc_.right_foot, rd_.tc_.left_hand, rd_.tc_.right_hand);
+            // rd_.torque_grav = WBC::GravityCompensationTorque(rd_);
+
+            double t_ = rd_.control_time_;
+            double dt = 1/30;
+            for(int i = 0; i < MODEL_DOF; i++){
+                desired_q_[i] = DyrosMath::cubic(t_, t_0_, t_0_+dt, q_0_[i], joint_target_[i], qdot_0_[i], 0);
+                desired_qdot_[i] = DyrosMath::cubicDot(t_, t_0_, t_0_+dt, q_0_[i], joint_target_[i], qdot_0_[i], 0);
+            }
+        }
+        for (int i = 0; i < MODEL_DOF; i++){
+            rd_.torque_desired[i] = rd_.pos_kp_v[i] * (desired_q_[i] - rd_.q_[i]) + rd_.pos_kv_v[i] * (desired_qdot_[i] - rd_.q_dot_[i]);
+        }
+    }
+    
     else if (rd_.tc_.mode == 9)
     {
         cc_timer_.reset();
@@ -644,33 +627,6 @@ void CustomController::computeFast()
     }
 }
 
-void CustomController::HapticPoseCallback(const geometry_msgs::PoseConstPtr &msg)
-{
-
-    float pos_x = CustomController::PositionMapping(msg -> position.x, 0);
-    float pos_y = CustomController::PositionMapping(msg -> position.y, 1);
-    float pos_z = CustomController::PositionMapping(msg -> position.z, 2);
-    float ori_x = CustomController::PositionMapping(msg -> orientation.x, 3);
-    float ori_y = CustomController::PositionMapping(msg -> orientation.y, 4);
-    float ori_z = CustomController::PositionMapping(msg -> orientation.z, 5);
-    float ori_w = CustomController::PositionMapping(msg -> orientation.w, 6);
-
-    // double posx = static_cast<double>(pos_x);
-    // double posy = static_cast<double>(pos_y); 
-    // double posz = static_cast<double>(pos_z);
-    double orix = static_cast<double>(ori_x);
-    double oriy = static_cast<double>(ori_y); 
-    double oriz = static_cast<double>(ori_z);
-    double oriw = static_cast<double>(ori_w);
-
-    haptic_pos_[0] = pos_x;
-    haptic_pos_[1] = pos_y; 
-    haptic_pos_[2] = pos_z;
-
-    haptic_orientation_ = CustomController::Quat2rotmatrix(orix, oriy, oriz, oriw);
-
-}
-
 void CustomController::ObjPoseCallback(const geometry_msgs::PoseConstPtr &msg)
 {
     float obj_x = msg->position.x;
@@ -724,25 +680,6 @@ void CustomController::RHandPoseTargetCallback(const geometry_msgs::PoseStampedP
     rd_.link_[Right_Hand].x_desired << msg->pose.position.x, msg->pose.position.y, msg->pose.position.z;
     rd_.link_[Right_Hand].rot_desired = CustomController::Quat2rotmatrix(msg->pose.orientation.w, msg->pose.orientation.x, msg->pose.orientation.y, msg->pose.orientation.z);
     pose_target_received = true;
-}
-
-float CustomController::PositionMapping(float haptic_val, int i)
-{
-    if (i == 0){
-        return -1 * (haptic_val + 0.051448) * 5.0 ;
-    }
-
-    else if(i == 1){
-        return -1 * (haptic_val + 0.000152) * 5.0;
-    }
-
-    else if (i == 2){
-        return (haptic_val - 0.007794) * 5.0;
-    }
-    else {
-     return haptic_val;
-    }
-    
 }
 
 void CustomController::publishRobotPoses()
