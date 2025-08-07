@@ -67,8 +67,7 @@ namespace QP
             Eigen::Matrix<double, JOINT_DOF, 1> qddot_lower_;
 
             Eigen::Matrix<double, TASK_DOF, TASK_DOF> slack_weight_;
-            Eigen::Matrix<double, JOINT_DOF, JOINT_DOF> joint_damping_weight_;
-            Eigen::Matrix<double, TASK_DOF, TASK_DOF> ee_damping_weight_;
+            Eigen::Matrix<double, JOINT_DOF, JOINT_DOF> damping_weight_;
             Eigen::Matrix<double, JOINT_DOF, JOINT_DOF> qddot_weight_;
             // double mani_weight_;
 
